@@ -2,6 +2,21 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 import type { Message, GroupChat } from "whatsapp-web.js";
 const qrcode = require("qrcode-terminal");
 const { scheduleJob, RecurrenceRule, Range } = require("node-schedule");
+import { createServer } from "http";
+
+// Simple health check server
+let isClientReady = false;
+const healthServer = createServer((req, res) => {
+  if (req.url === "/health" || req.url === "/") {
+    const status = isClientReady ? 200 : 503;
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: isClientReady ? "ok" : "starting", ready: isClientReady }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+healthServer.listen(3000, () => console.log("Health server on :3000"));
 
 // Goal tracking imports
 import {
@@ -423,6 +438,7 @@ client.on("auth_failure", (msg: string) => {
 
 client.on("ready", async () => {
   console.log("Client is ready! KoruClub is now active.");
+  isClientReady = true;
   botStartTime = new Date();
   
   // Initialize goal tracking

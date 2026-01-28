@@ -9,6 +9,7 @@ RUN apt-get update \
         fonts-thai-tlwg \
         fonts-freefont-ttf \
         ca-certificates \
+        curl \
         --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -45,5 +46,8 @@ USER pptruser
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
 
 CMD ["bun", "run", "start"]
