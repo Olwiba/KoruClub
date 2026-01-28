@@ -180,7 +180,6 @@ dist
 
 # Bun specific
 .bun
-bun.lockb
 
 # Application data
 data/
@@ -193,6 +192,5 @@ sessions/
 !.vscode/tasks.json
 !.vscode/launch.json
 
-# Lockfiles
-*.lockb
-*.lock
+# npm lockfile (using bun instead)
+package-lock.json
