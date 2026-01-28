@@ -7,7 +7,6 @@ RUN apt-get update \
         fonts-ipafont-gothic \
         fonts-wqy-zenhei \
         fonts-thai-tlwg \
-        fonts-kacst \
         fonts-freefont-ttf \
         ca-certificates \
         python3 \
