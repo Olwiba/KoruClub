@@ -17,8 +17,9 @@ services:
     build: .
     container_name: koruclub-bot
     volumes:
-      - ./data:/app/data
-      - ./.wwebjs_auth:/app/.wwebjs_auth
+      - koruclub_data:/app/data
+      - koruclub_auth:/app/.wwebjs_auth
+      - koruclub_cache:/app/.wwebjs_cache
     environment:
       - OLLAMA_HOST=http://ollama:11434
     depends_on:
@@ -28,3 +29,6 @@ services:
 
 volumes:
   ollama_data:
+  koruclub_data:
+  koruclub_auth:
+  koruclub_cache:
