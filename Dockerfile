@@ -1,6 +1,6 @@
-FROM node:18-slim
+FROM oven/bun:1 AS base
 
-# Install Chromium and dependencies (more reliable than Google Chrome .deb)
+# Install Chromium and dependencies
 RUN apt-get update \
     && apt-get install -y \
         chromium \
@@ -10,6 +10,8 @@ RUN apt-get update \
         fonts-kacst \
         fonts-freefont-ttf \
         ca-certificates \
+        python3 \
+        build-essential \
         --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -17,11 +19,11 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json bun.lockb ./
 
 # Install app dependencies
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-RUN npm ci --omit=dev
+RUN bun install --frozen-lockfile --production
 
 # Add user so we don't need --no-sandbox
 RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
@@ -43,4 +45,4 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 3000
 
-CMD ["npm", "start"] 
+CMD ["bun", "run", "start"] 
