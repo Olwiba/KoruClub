@@ -1,0 +1,30 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: koruclub-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=30s
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  koruclub:
+    build: .
+    container_name: koruclub-bot
+    volumes:
+      - ./data:/app/data
+      - ./.wwebjs_auth:/app/.wwebjs_auth
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:

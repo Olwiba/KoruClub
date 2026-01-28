@@ -3,6 +3,19 @@ import type { Message, GroupChat } from "whatsapp-web.js";
 const qrcode = require("qrcode-terminal");
 const { scheduleJob, RecurrenceRule, Range } = require("node-schedule");
 
+// Goal tracking imports
+import {
+  loadGoals,
+  addGoals,
+  getActiveGoals,
+  getCurrentSprintGoals,
+  completeGoal,
+  getSprintSummary,
+  getUsersWithActiveGoals,
+  type GoalStore,
+} from "./goalStore";
+import { initLLM, extractGoals, matchCompletions, generateResponse, isLLMReady } from "./llm";
+
 // Bot configuration
 const BOT_CONFIG = {
   COMMAND_PREFIX: "!bot",
@@ -14,6 +27,7 @@ const BOT_CONFIG = {
   FRIDAY_COMMAND: "!bot friday",
   DEMO_COMMAND: "!bot demo",
   MONTHLY_COMMAND: "!bot monthly",
+  GOALS_COMMAND: "!bot goals",
   TARGET_GROUP_ID: "", // This will be populated when the bot joins a group
 };
 
@@ -57,6 +71,11 @@ let schedulerActive = false;
 const scheduledJobs: Record<string, any> = {};
 let botStartTime: Date | null = null;
 
+// Goal tracking state
+let goalStore: GoalStore = {};
+let lastKickoffMessageId: string | null = null;
+const COMPLETION_KEYWORDS = ["done", "finished", "completed", "shipped", "launched", "deployed", "✅", "🎉"];
+
 // Helper function to safely get chat for scheduled tasks
 const safelyGetChat = async (chatId: string): Promise<GroupChat | null> => {
   try {
@@ -85,7 +104,7 @@ const retryScheduledTask = async (
   messageText: string,
   maxRetries: number = 3,
   baseDelay: number = 60000 // 1 minute
-): Promise<boolean> => {
+): Promise<Message | null> => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`${taskName}: Attempt ${attempt}/${maxRetries}`);
@@ -95,11 +114,11 @@ const retryScheduledTask = async (
         throw new Error("Unable to get target group chat");
       }
 
-      await groupChat.sendMessage(messageText);
+      const sentMessage = await groupChat.sendMessage(messageText);
       console.log(
         `${taskName}: Message sent successfully on attempt ${attempt}`
       );
-      return true;
+      return sentMessage;
     } catch (error) {
       console.error(`${taskName}: Attempt ${attempt} failed:`, error);
 
@@ -112,7 +131,7 @@ const retryScheduledTask = async (
   }
 
   console.error(`${taskName}: All ${maxRetries} attempts failed`);
-  return false;
+  return null;
 };
 
 // Initialize bot status
@@ -211,10 +230,15 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
 
         console.log(`Executing Sprint Kickoff at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
 
-        await retryScheduledTask(
+        const kickoffMsg = await retryScheduledTask(
           "Sprint Kickoff",
           "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
         );
+        
+        if (kickoffMsg) {
+          lastKickoffMessageId = kickoffMsg.id._serialized;
+          console.log(`Tracking kickoff message: ${lastKickoffMessageId}`);
+        }
 
         updateNextScheduledTasks();
       } catch (error) {
@@ -285,7 +309,48 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
       }
     });
 
-    // 4. Last day of every month at 9am NZT
+    // 4. Mid-sprint check-in (Wednesday of week 2 at 9am NZT)
+    const checkInRule = new RecurrenceRule();
+    checkInRule.dayOfWeek = 3; // Wednesday
+    checkInRule.hour = 9;
+    checkInRule.minute = 0;
+    checkInRule.tz = "Pacific/Auckland";
+
+    scheduledJobs.checkIn = scheduleJob("Mid-sprint Check-in", checkInRule, async () => {
+      try {
+        const now = new Date(
+          new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
+        );
+
+        // Only execute on week 2 of sprint (even ISO weeks)
+        if (isSprintWeek(now)) {
+          console.log(`Skipping check-in - not mid-sprint (week ${getISOWeekNumber(now)})`);
+          return;
+        }
+
+        console.log(`Executing Mid-sprint Check-in at ${formatDate(now)}`);
+
+        // Get users with active goals and mention them
+        const usersWithGoals = getUsersWithActiveGoals(goalStore);
+        if (usersWithGoals.length === 0) {
+          await retryScheduledTask(
+            "Mid-sprint Check-in",
+            "*Mid-Sprint Check-in* 📊\n\nHow's everyone tracking on their goals? Drop an update below! 👇"
+          );
+        } else {
+          await retryScheduledTask(
+            "Mid-sprint Check-in",
+            "*Mid-Sprint Check-in* 📊\n\nWe're halfway through the sprint! How's everyone tracking?\n\n👉 Share a quick update on your progress 👇"
+          );
+        }
+
+        updateNextScheduledTasks();
+      } catch (error) {
+        console.error("Error in Mid-sprint Check-in task:", error);
+      }
+    });
+
+    // 5. Last day of every month at 9am NZT
     scheduledJobs.monthEnd = scheduleJob("0 9 * * *", async () => {
       try {
         const now = new Date(
@@ -356,9 +421,22 @@ client.on("auth_failure", (msg: string) => {
   console.error("Authentication failed:", msg);
 });
 
-client.on("ready", () => {
+client.on("ready", async () => {
   console.log("Client is ready! KoruClub is now active.");
   botStartTime = new Date();
+  
+  // Initialize goal tracking
+  goalStore = loadGoals();
+  console.log(`Loaded ${Object.keys(goalStore).length} users with goals`);
+  
+  // Initialize LLM (non-blocking)
+  initLLM().then((ready) => {
+    if (ready) {
+      console.log("Goal tracking with LLM is active");
+    } else {
+      console.warn("LLM not available - goal tracking will be limited");
+    }
+  });
 });
 
 client.on("disconnected", (reason: string) => {
@@ -467,6 +545,8 @@ client.on("message", async (message: Message) => {
           `Triggers the biweekly demo day message manually.\n\n` +
           `📅 *${BOT_CONFIG.MONTHLY_COMMAND}*\n` +
           `Triggers the monthly celebration message manually.\n\n` +
+          `📋 *${BOT_CONFIG.GOALS_COMMAND}*\n` +
+          `Shows your current active goals.\n\n` +
           `*Note:* You can also DM me *${BOT_CONFIG.STATUS_COMMAND}* for a private status update.`;
 
         await chat.sendMessage(helpText);
@@ -506,6 +586,85 @@ client.on("message", async (message: Message) => {
         await chat.sendMessage(
           "*Monthly Celebration* 🎊\n\nAs we close out the month, take a moment to reflect on your accomplishments!\n\nBe proud of what you've achieved ✨"
         );
+      } else if (content === BOT_CONFIG.GOALS_COMMAND) {
+        // Show user's current goals
+        const userId = message.author || message.from;
+        const activeGoals = getActiveGoals(goalStore, userId);
+        
+        if (activeGoals.length === 0) {
+          await chat.sendMessage(
+            "📋 You don't have any active goals yet.\n\nReply to a Sprint Kickoff message to set your goals!"
+          );
+        } else {
+          const goalsList = activeGoals
+            .map((g, i) => `${i + 1}. ${g.text}`)
+            .join("\n");
+          await chat.sendMessage(
+            `*Your Active Goals* 📋\n\n${goalsList}\n\n_Mark as done by posting an update with "done", "finished", or "completed"_`
+          );
+        }
+      } else if (!content.startsWith(BOT_CONFIG.COMMAND_PREFIX)) {
+        // Non-command message - check for goal-related content
+        const userId = message.author || message.from;
+        
+        // Check if this is a reply to a kickoff message (goal setting)
+        const quotedMsg = await message.getQuotedMessage().catch(() => null);
+        const isReplyToKickoff = quotedMsg && 
+          (quotedMsg.id._serialized === lastKickoffMessageId ||
+           quotedMsg.body.includes("Sprint Kickoff") ||
+           quotedMsg.body.includes("What are your main goals"));
+        
+        if (isReplyToKickoff && isLLMReady()) {
+          // Extract goals from the message
+          console.log(`[Goal Extraction] Processing goals from ${userId}`);
+          const extractedGoals = await extractGoals(content);
+          
+          if (extractedGoals.length > 0) {
+            const newGoals = addGoals(goalStore, userId, extractedGoals);
+            console.log(`[Goal Extraction] Captured ${newGoals.length} goals for ${userId}`);
+            
+            // Acknowledge the goals
+            const response = await generateResponse("goal_captured", { goals: extractedGoals });
+            const goalsList = extractedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
+            
+            await message.reply(
+              response || `✅ Got it! I've captured your goals:\n\n${goalsList}\n\n_I'll track these for you this sprint!_`
+            );
+          }
+        }
+        
+        // Check for completion keywords
+        const hasCompletionKeyword = COMPLETION_KEYWORDS.some((kw) => 
+          content.toLowerCase().includes(kw.toLowerCase())
+        );
+        
+        if (hasCompletionKeyword && isLLMReady()) {
+          const activeGoals = getActiveGoals(goalStore, userId);
+          
+          if (activeGoals.length > 0) {
+            console.log(`[Completion Check] Checking message from ${userId} against ${activeGoals.length} goals`);
+            const matches = await matchCompletions(content, activeGoals);
+            
+            const completedGoals: string[] = [];
+            for (const match of matches) {
+              if (match.confidence === "high" || match.confidence === "medium") {
+                const goal = completeGoal(goalStore, userId, match.goalId);
+                if (goal) {
+                  completedGoals.push(goal.text);
+                  console.log(`[Completion] Marked goal as done: ${goal.text}`);
+                }
+              }
+            }
+            
+            if (completedGoals.length > 0) {
+              const response = await generateResponse("goal_completed", { completedGoals });
+              await message.react("🎉");
+              if (response && completedGoals.length > 1) {
+                await message.reply(response);
+              }
+            }
+          }
+        }
       }
     } else if (isDirectMessage) {
       // Handle direct message commands (admin only)
