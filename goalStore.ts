@@ -1,5 +1,4 @@
-import Database from "better-sqlite3";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 
 export interface Goal {
   id: string;
@@ -11,43 +10,20 @@ export interface Goal {
   sprintNumber: number;
 }
 
-// GoalStore is now just a marker type - DB is managed internally
-export type GoalStore = Record<string, never>;
+interface GoalData {
+  goals: Goal[];
+}
+
+export type GoalStore = GoalData;
 
 const DATA_DIR = "./data";
-const DB_FILE = `${DATA_DIR}/goals.db`;
+const DATA_FILE = `${DATA_DIR}/goals.json`;
+const TEMP_FILE = `${DATA_DIR}/goals.tmp.json`;
 
-let db: Database.Database | null = null;
-
-// Ensure data directory exists and initialize DB
-const ensureDb = (): Database.Database => {
-  if (db) return db;
-
-  if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true });
-  }
-
-  db = new Database(DB_FILE);
-  
-  // Create tables
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS goals (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      text TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at TEXT NOT NULL,
-      completed_at TEXT,
-      sprint_number INTEGER NOT NULL
-    );
-    
-    CREATE INDEX IF NOT EXISTS idx_goals_user_id ON goals(user_id);
-    CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
-    CREATE INDEX IF NOT EXISTS idx_goals_sprint ON goals(sprint_number);
-  `);
-
-  console.log("SQLite database initialized");
-  return db;
+// Atomic write to prevent corruption
+const saveData = (data: GoalData): void => {
+  writeFileSync(TEMP_FILE, JSON.stringify(data, null, 2));
+  renameSync(TEMP_FILE, DATA_FILE);
 };
 
 // Get current sprint number based on ISO week
@@ -61,164 +37,126 @@ export const getCurrentSprintNumber = (): number => {
   return Math.ceil(weekNum / 2);
 };
 
-// Initialize the database and return empty store for compatibility
+// Load goals from file
 export const loadGoals = (): GoalStore => {
-  ensureDb();
-  return {};
+  if (!existsSync(DATA_DIR)) {
+    mkdirSync(DATA_DIR, { recursive: true });
+  }
+
+  if (!existsSync(DATA_FILE)) {
+    const initial: GoalData = { goals: [] };
+    saveData(initial);
+    console.log("Goals JSON initialized");
+    return initial;
+  }
+
+  try {
+    const raw = readFileSync(DATA_FILE, "utf-8");
+    const data = JSON.parse(raw) as GoalData;
+    console.log(`Loaded ${data.goals.length} goals from storage`);
+    return data;
+  } catch (err) {
+    console.error("Failed to load goals, starting fresh:", err);
+    const initial: GoalData = { goals: [] };
+    saveData(initial);
+    return initial;
+  }
 };
 
 // Add goals for a user
 export const addGoals = (
-  _store: GoalStore,
+  store: GoalStore,
   userId: string,
   goalTexts: string[]
 ): Goal[] => {
-  const database = ensureDb();
   const sprintNum = getCurrentSprintNumber();
   const now = new Date().toISOString();
-
-  const insert = database.prepare(`
-    INSERT INTO goals (id, user_id, text, status, created_at, sprint_number)
-    VALUES (?, ?, ?, 'active', ?, ?)
-  `);
-
   const newGoals: Goal[] = [];
 
-  const insertMany = database.transaction(() => {
-    goalTexts.forEach((text, idx) => {
-      const id = `${userId}-${sprintNum}-${Date.now()}-${idx}`;
-      insert.run(id, userId, text, now, sprintNum);
-      newGoals.push({
-        id,
-        userId,
-        text,
-        status: "active",
-        createdAt: now,
-        completedAt: null,
-        sprintNumber: sprintNum,
-      });
-    });
+  goalTexts.forEach((text, idx) => {
+    const goal: Goal = {
+      id: `${userId}-${sprintNum}-${Date.now()}-${idx}`,
+      userId,
+      text,
+      status: "active",
+      createdAt: now,
+      completedAt: null,
+      sprintNumber: sprintNum,
+    };
+    store.goals.push(goal);
+    newGoals.push(goal);
   });
 
-  insertMany();
+  saveData(store);
   return newGoals;
 };
 
 // Get active goals for a user
-export const getActiveGoals = (_store: GoalStore, userId: string): Goal[] => {
-  const database = ensureDb();
-  const rows = database.prepare(`
-    SELECT id, user_id as userId, text, status, created_at as createdAt, 
-           completed_at as completedAt, sprint_number as sprintNumber
-    FROM goals 
-    WHERE user_id = ? AND status = 'active'
-    ORDER BY created_at DESC
-  `).all(userId) as Goal[];
-  
-  return rows;
+export const getActiveGoals = (store: GoalStore, userId: string): Goal[] => {
+  return store.goals.filter((g) => g.userId === userId && g.status === "active");
 };
 
 // Get goals for current sprint
-export const getCurrentSprintGoals = (_store: GoalStore, userId: string): Goal[] => {
-  const database = ensureDb();
+export const getCurrentSprintGoals = (store: GoalStore, userId: string): Goal[] => {
   const currentSprint = getCurrentSprintNumber();
-  
-  const rows = database.prepare(`
-    SELECT id, user_id as userId, text, status, created_at as createdAt,
-           completed_at as completedAt, sprint_number as sprintNumber
-    FROM goals 
-    WHERE user_id = ? AND sprint_number = ? AND status = 'active'
-    ORDER BY created_at DESC
-  `).all(userId, currentSprint) as Goal[];
-  
-  return rows;
+  return store.goals.filter(
+    (g) => g.userId === userId && g.sprintNumber === currentSprint && g.status === "active"
+  );
 };
 
 // Mark a goal as completed
-export const completeGoal = (_store: GoalStore, userId: string, goalId: string): Goal | null => {
-  const database = ensureDb();
-  const now = new Date().toISOString();
-  
-  const result = database.prepare(`
-    UPDATE goals 
-    SET status = 'completed', completed_at = ?
-    WHERE id = ? AND user_id = ?
-  `).run(now, goalId, userId);
+export const completeGoal = (store: GoalStore, userId: string, goalId: string): Goal | null => {
+  const goal = store.goals.find((g) => g.id === goalId && g.userId === userId);
+  if (!goal) return null;
 
-  if (result.changes === 0) return null;
-
-  const goal = database.prepare(`
-    SELECT id, user_id as userId, text, status, created_at as createdAt,
-           completed_at as completedAt, sprint_number as sprintNumber
-    FROM goals WHERE id = ?
-  `).get(goalId) as Goal | undefined;
-
-  return goal || null;
+  goal.status = "completed";
+  goal.completedAt = new Date().toISOString();
+  saveData(store);
+  return goal;
 };
 
 // Carry over incomplete goals to next sprint
-export const carryOverGoals = (_store: GoalStore, userId: string): Goal[] => {
-  const database = ensureDb();
+export const carryOverGoals = (store: GoalStore, userId: string): Goal[] => {
   const currentSprint = getCurrentSprintNumber();
   const now = new Date().toISOString();
+  const carriedOver: Goal[] = [];
 
-  // Get goals to carry over
-  const oldGoals = database.prepare(`
-    SELECT id, text FROM goals 
-    WHERE user_id = ? AND status = 'active' AND sprint_number < ?
-  `).all(userId, currentSprint) as { id: string; text: string }[];
+  // Find old active goals
+  const oldGoals = store.goals.filter(
+    (g) => g.userId === userId && g.status === "active" && g.sprintNumber < currentSprint
+  );
 
   if (oldGoals.length === 0) return [];
 
-  const carriedOver: Goal[] = [];
+  // Mark old goals as carried over and create new ones
+  oldGoals.forEach((old, idx) => {
+    old.status = "carried_over";
 
-  const carryOver = database.transaction(() => {
-    // Mark old goals as carried over
-    database.prepare(`
-      UPDATE goals SET status = 'carried_over'
-      WHERE user_id = ? AND status = 'active' AND sprint_number < ?
-    `).run(userId, currentSprint);
-
-    // Create new goals for current sprint
-    const insert = database.prepare(`
-      INSERT INTO goals (id, user_id, text, status, created_at, sprint_number)
-      VALUES (?, ?, ?, 'active', ?, ?)
-    `);
-
-    oldGoals.forEach((old, idx) => {
-      const id = `${userId}-${currentSprint}-${Date.now()}-carried-${idx}`;
-      insert.run(id, userId, old.text, now, currentSprint);
-      carriedOver.push({
-        id,
-        userId,
-        text: old.text,
-        status: "active",
-        createdAt: now,
-        completedAt: null,
-        sprintNumber: currentSprint,
-      });
-    });
+    const newGoal: Goal = {
+      id: `${userId}-${currentSprint}-${Date.now()}-carried-${idx}`,
+      userId,
+      text: old.text,
+      status: "active",
+      createdAt: now,
+      completedAt: null,
+      sprintNumber: currentSprint,
+    };
+    store.goals.push(newGoal);
+    carriedOver.push(newGoal);
   });
 
-  carryOver();
+  saveData(store);
   return carriedOver;
 };
 
 // Get sprint summary for a user
 export const getSprintSummary = (
-  _store: GoalStore,
+  store: GoalStore,
   userId: string,
   sprintNumber?: number
 ): { completed: Goal[]; active: Goal[]; carriedOver: Goal[] } => {
-  const database = ensureDb();
   const sprint = sprintNumber ?? getCurrentSprintNumber();
-
-  const goals = database.prepare(`
-    SELECT id, user_id as userId, text, status, created_at as createdAt,
-           completed_at as completedAt, sprint_number as sprintNumber
-    FROM goals 
-    WHERE user_id = ? AND sprint_number = ?
-  `).all(userId, sprint) as Goal[];
+  const goals = store.goals.filter((g) => g.userId === userId && g.sprintNumber === sprint);
 
   return {
     completed: goals.filter((g) => g.status === "completed"),
@@ -228,47 +166,40 @@ export const getSprintSummary = (
 };
 
 // Get all users with active goals
-export const getUsersWithActiveGoals = (_store: GoalStore): string[] => {
-  const database = ensureDb();
-  const rows = database.prepare(`
-    SELECT DISTINCT user_id FROM goals WHERE status = 'active'
-  `).all() as { user_id: string }[];
-  
-  return rows.map((r) => r.user_id);
+export const getUsersWithActiveGoals = (store: GoalStore): string[] => {
+  const users = new Set<string>();
+  store.goals.filter((g) => g.status === "active").forEach((g) => users.add(g.userId));
+  return Array.from(users);
 };
 
 // Get stats for a user
-export const getUserStats = (_store: GoalStore, userId: string): {
+export const getUserStats = (
+  store: GoalStore,
+  userId: string
+): {
   totalGoals: number;
   completedGoals: number;
   completionRate: number;
   currentStreak: number;
 } => {
-  const database = ensureDb();
-  
-  const total = database.prepare(`
-    SELECT COUNT(*) as count FROM goals WHERE user_id = ?
-  `).get(userId) as { count: number };
-
-  const completed = database.prepare(`
-    SELECT COUNT(*) as count FROM goals WHERE user_id = ? AND status = 'completed'
-  `).get(userId) as { count: number };
-
-  const completionRate = total.count > 0 
-    ? Math.round((completed.count / total.count) * 100) 
-    : 0;
+  const userGoals = store.goals.filter((g) => g.userId === userId);
+  const total = userGoals.length;
+  const completed = userGoals.filter((g) => g.status === "completed").length;
+  const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   // Calculate streak (consecutive sprints with completions)
-  const sprintsWithCompletions = database.prepare(`
-    SELECT DISTINCT sprint_number FROM goals 
-    WHERE user_id = ? AND status = 'completed'
-    ORDER BY sprint_number DESC
-  `).all(userId) as { sprint_number: number }[];
+  const sprintsWithCompletions = [
+    ...new Set(
+      userGoals
+        .filter((g) => g.status === "completed")
+        .map((g) => g.sprintNumber)
+    ),
+  ].sort((a, b) => b - a);
 
   let streak = 0;
   const currentSprint = getCurrentSprintNumber();
   for (let i = 0; i < sprintsWithCompletions.length; i++) {
-    if (sprintsWithCompletions[i].sprint_number === currentSprint - i) {
+    if (sprintsWithCompletions[i] === currentSprint - i) {
       streak++;
     } else {
       break;
@@ -276,8 +207,8 @@ export const getUserStats = (_store: GoalStore, userId: string): {
   }
 
   return {
-    totalGoals: total.count,
-    completedGoals: completed.count,
+    totalGoals: total,
+    completedGoals: completed,
     completionRate,
     currentStreak: streak,
   };

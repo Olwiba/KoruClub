@@ -9,8 +9,6 @@ RUN apt-get update \
         fonts-thai-tlwg \
         fonts-freefont-ttf \
         ca-certificates \
-        python3 \
-        build-essential \
         --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -44,4 +42,4 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 3000
 
-CMD ["bun", "run", "start"] 
+CMD ["bun", "run", "start"]
