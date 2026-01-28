@@ -157,6 +157,20 @@ const getWeekOfMonth = (date: Date): number => {
   return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
+// Function to get ISO week number (1-52)
+const getISOWeekNumber = (date: Date): number => {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+};
+
+// Check if current week is a sprint week (odd ISO weeks)
+const isSprintWeek = (date: Date): boolean => {
+  return getISOWeekNumber(date) % 2 === 1;
+};
+
 // Function to create, schedule and manage timer tasks
 const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
   if (schedulerActive) {
@@ -176,7 +190,7 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
   }
 
   try {
-    // 1. Monday 9am NZT message
+    // 1. Bi-weekly Monday 9am NZT - Sprint kickoff (odd ISO weeks)
     const mondayRule = new RecurrenceRule();
     mondayRule.dayOfWeek = 1; // Monday
     mondayRule.hour = 9;
@@ -185,21 +199,30 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
 
     scheduledJobs.monday = scheduleJob("Monday 9am", mondayRule, async () => {
       try {
-        const now = new Date();
-        console.log(`Executing Monday 9am task at ${formatDate(now)}`);
+        const now = new Date(
+          new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
+        );
+
+        // Only execute on sprint weeks (odd ISO weeks)
+        if (!isSprintWeek(now)) {
+          console.log(`Skipping Monday task - not a sprint week (week ${getISOWeekNumber(now)})`);
+          return;
+        }
+
+        console.log(`Executing Sprint Kickoff at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
 
         await retryScheduledTask(
-          "Monday 9am",
-          "*Kick off your week with purpose*\n\n👉 What are your main goals this week?\n\nShare below and let's crush this week together! 💪"
+          "Sprint Kickoff",
+          "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
         );
 
         updateNextScheduledTasks();
       } catch (error) {
-        console.error("Error in Monday 9am task:", error);
+        console.error("Error in Sprint Kickoff task:", error);
       }
     });
 
-    // 2. Friday 3:30pm NZT message
+    // 2. Bi-weekly Friday 3:30pm NZT - Sprint review (even ISO weeks)
     const fridayRule = new RecurrenceRule();
     fridayRule.dayOfWeek = 5; // Friday
     fridayRule.hour = 15;
@@ -211,17 +234,26 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
       fridayRule,
       async () => {
         try {
-          const now = new Date();
-          console.log(`Executing Friday 3:30pm task at ${formatDate(now)}`);
+          const now = new Date(
+            new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
+          );
+
+          // Only execute on sprint review weeks (even ISO weeks)
+          if (isSprintWeek(now)) {
+            console.log(`Skipping Friday task - not a review week (week ${getISOWeekNumber(now)})`);
+            return;
+          }
+
+          console.log(`Executing Sprint Review at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
 
           await retryScheduledTask(
-            "Friday 3:30pm",
-            "*Wrap up your week with reflection*\n\n👉 How did you do on your goals this week?\n\nShare your insights and let's celebrate our growth! 🎉"
+            "Sprint Review",
+            "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉"
           );
 
           updateNextScheduledTasks();
         } catch (error) {
-          console.error("Error in Friday 3:30pm task:", error);
+          console.error("Error in Sprint Review task:", error);
         }
       }
     );
@@ -325,7 +357,7 @@ client.on("auth_failure", (msg: string) => {
 });
 
 client.on("ready", () => {
-  console.log("Client is ready! WhatsApp bot is now active.");
+  console.log("Client is ready! KoruClub is now active.");
   botStartTime = new Date();
 });
 
@@ -428,9 +460,9 @@ client.on("message", async (message: Message) => {
           `🛑 *${BOT_CONFIG.STOP_COMMAND}*\n` +
           `Stops the scheduled messaging service.\n\n` +
           `📅 *${BOT_CONFIG.MONDAY_COMMAND}*\n` +
-          `Triggers the Monday message manually.\n\n` +
+          `Triggers the Sprint Kickoff message manually.\n\n` +
           `📅 *${BOT_CONFIG.FRIDAY_COMMAND}*\n` +
-          `Triggers the Friday message manually.\n\n` +
+          `Triggers the Sprint Review message manually.\n\n` +
           `📅 *${BOT_CONFIG.DEMO_COMMAND}*\n` +
           `Triggers the biweekly demo day message manually.\n\n` +
           `📅 *${BOT_CONFIG.MONTHLY_COMMAND}*\n` +
@@ -439,20 +471,20 @@ client.on("message", async (message: Message) => {
 
         await chat.sendMessage(helpText);
       } else if (content === BOT_CONFIG.MONDAY_COMMAND) {
-        // Manually trigger Monday message
+        // Manually trigger sprint kickoff message
         console.log(
-          `Manually triggering Monday message at ${formatDate(new Date())}`
+          `Manually triggering Sprint Kickoff at ${formatDate(new Date())}`
         );
         await chat.sendMessage(
-          "*Kick off your week with purpose*\n\n👉 What are your main goals this week?\n\nShare below and let's crush this week together! 💪"
+          "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
         );
       } else if (content === BOT_CONFIG.FRIDAY_COMMAND) {
-        // Manually trigger Friday message
+        // Manually trigger sprint review message
         console.log(
-          `Manually triggering Friday message at ${formatDate(new Date())}`
+          `Manually triggering Sprint Review at ${formatDate(new Date())}`
         );
         await chat.sendMessage(
-          "*Wrap up your week with reflection*\n\n👉 How did you do on your goals this week?\n\nShare your insights and let's celebrate our growth! 🎉"
+          "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉"
         );
       } else if (content === BOT_CONFIG.DEMO_COMMAND) {
         // Manually trigger biweekly demo day message
@@ -520,5 +552,5 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 
 // Initialize the client
-console.log("Starting WhatsApp bot...");
+console.log("Starting KoruClub...");
 client.initialize();

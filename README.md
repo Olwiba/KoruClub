@@ -1,6 +1,6 @@
-# WhatsAppBot 🤖
+# koruClub 🤖
 
-A WhatsApp bot created to post accountability messages, help set goals and much more!
+A WhatsApp-based accountability club for posting messages, setting goals and much more!
 
 ## Features ✨
 
