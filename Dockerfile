@@ -36,8 +36,8 @@ RUN mkdir -p /app/.wwebjs_auth /app/.wwebjs_cache /app/data \
 # Copy app source
 COPY . .
 
-# Fix ownership after copying files
-RUN chown -R pptruser:pptruser /app
+# Make entrypoint executable and fix ownership
+RUN chmod +x /app/entrypoint.sh && chown -R pptruser:pptruser /app
 
 # Run everything after as non-privileged user
 USER pptruser
@@ -50,4 +50,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
   CMD curl -f http://localhost:3000/health || exit 1
 
-CMD ["bun", "run", "start"]
+ENTRYPOINT ["/app/entrypoint.sh"]
