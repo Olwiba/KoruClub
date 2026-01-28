@@ -28,6 +28,10 @@ RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
     && mkdir -p /home/pptruser/.chrome-user-data \
     && chown -R pptruser:pptruser /home/pptruser
 
+# Create directories for persistent data (volumes mount here)
+RUN mkdir -p /app/.wwebjs_auth /app/.wwebjs_cache /app/data \
+    && chown -R pptruser:pptruser /app/.wwebjs_auth /app/.wwebjs_cache /app/data
+
 # Copy app source
 COPY . .
 
