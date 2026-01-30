@@ -89,9 +89,13 @@ const BOT_CONFIG = {
 };
 
 // Configure auth strategy based on environment
+console.log("[DEBUG] Setting up auth strategy...");
+const store = isProduction ? new PrismaStore() : null;
+if (store) console.log("[DEBUG] PrismaStore created");
+
 const authStrategy = isProduction
   ? new RemoteAuth({
-      store: new PrismaStore(),
+      store,
       backupSyncIntervalMs: 300000, // 5 minutes
       clientId: "koruclub",
       dataPath: "./.wwebjs_auth",
@@ -101,6 +105,7 @@ const authStrategy = isProduction
 console.log(`Using ${isProduction ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
 
 // Create WhatsApp client
+console.log("[DEBUG] Creating WhatsApp client...");
 const client = new Client({
   authStrategy,
   puppeteer: {
@@ -390,16 +395,16 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
 };
 
 // WhatsApp event handlers
+console.log("[DEBUG] Registering event handlers...");
+
 client.on("qr", (qr: string) => {
+  console.log("[DEBUG] QR event received");
   qrcode.generate(qr, { small: true });
   console.log("QR code generated. Scan with WhatsApp mobile app.");
 });
 
-client.on("loading_screen", (percent: number) => {
-  console.log(`Loading: ${percent}%`);
-});
-
 client.on("authenticated", () => {
+  console.log("[DEBUG] authenticated event fired");
   console.log("Authentication successful!");
   console.log("Waiting for WhatsApp Web to load...");
 });
@@ -413,14 +418,15 @@ client.on("remote_session_saved", () => {
 });
 
 client.on("loading_screen", (percent: number, message: string) => {
-  console.log(`Loading: ${percent}% - ${message}`);
+  console.log(`[DEBUG] loading_screen event: ${percent}% - ${message}`);
 });
 
 client.on("disconnected", (reason: string) => {
-  console.log("Client disconnected:", reason);
+  console.log("[DEBUG] disconnected event:", reason);
 });
 
 client.on("ready", async () => {
+  console.log("[DEBUG] ready event fired");
   console.log("Client is ready! KoruClub is now active.");
   isClientReady = true;
   botStartTime = new Date();
@@ -654,9 +660,11 @@ process.on("unhandledRejection", (reason, promise) => {
 
 // Main startup
 async function main() {
+  console.log("[DEBUG] main() starting...");
   console.log("Starting KoruClub...");
 
   // Connect to database
+  console.log("[DEBUG] Connecting to database...");
   try {
     await db.$connect();
     console.log("Database connected");
@@ -666,9 +674,11 @@ async function main() {
   }
 
   // Initialize WhatsApp client
+  console.log("[DEBUG] Calling client.initialize()...");
   client.initialize().catch((err: Error) => {
     console.error("Client initialization failed:", err);
   });
+  console.log("[DEBUG] client.initialize() called (async, continuing...)");
 }
 
 main().catch((err) => {
