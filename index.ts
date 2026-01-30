@@ -93,7 +93,10 @@ console.log("[DEBUG] Setting up auth strategy...");
 const store = isProduction ? new PrismaStore() : null;
 if (store) console.log("[DEBUG] PrismaStore created");
 
-const authStrategy = isProduction
+// TEMP: Force LocalAuth to test if RemoteAuth is causing the hang
+const USE_REMOTE_AUTH = false; // Set to true to re-enable RemoteAuth
+
+const authStrategy = isProduction && USE_REMOTE_AUTH
   ? new RemoteAuth({
       store,
       backupSyncIntervalMs: 300000, // 5 minutes
@@ -102,7 +105,7 @@ const authStrategy = isProduction
     })
   : new LocalAuth({ dataPath: ".wwebjs_auth" });
 
-console.log(`Using ${isProduction ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
+console.log(`Using ${isProduction && USE_REMOTE_AUTH ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
 
 // Create WhatsApp client
 console.log("[DEBUG] Creating WhatsApp client...");
