@@ -476,6 +476,20 @@ client.on("ready", async () => {
     readyBackupTimeout = null;
   }
 
+  // Send admin notification if configured
+  const adminChatId = process.env.ADMIN_CHAT_ID;
+  if (adminChatId) {
+    setTimeout(async () => {
+      try {
+        const adminChat = await client.getChatById(adminChatId);
+        await adminChat.sendMessage("✅ *Bot Online*\n\nKoruClub is now connected and ready.");
+        console.log("Sent online notification to admin");
+      } catch (err) {
+        console.error("Failed to send admin notification:", err);
+      }
+    }, 2000);
+  }
+
   // Initialize goal tracking
   await loadGoals();
 
@@ -498,6 +512,7 @@ client.on("disconnected", (reason: string) => {
 
 // Message handler
 client.on("message", async (message: Message) => {
+  console.log("[DEBUG] message event received:", message.body?.substring(0, 50));
   try {
     const chat = await message.getChat();
     const content = message.body.trim();
@@ -505,18 +520,34 @@ client.on("message", async (message: Message) => {
     const isDirectMessage = !isGroupMessage;
 
     const timestamp = new Date().toISOString();
+    const adminChatId = process.env.ADMIN_CHAT_ID;
+    const targetGroupId = process.env.TARGET_GROUP_ID;
+
     if (isGroupMessage) {
-      console.log(`[${timestamp}] Received group message from ${chat.name}`);
+      console.log(`[${timestamp}] Received group message from ${chat.name}: ${content}`);
     } else {
-      console.log(`[${timestamp}] Received direct message`);
+      console.log(`[${timestamp}] Received direct message from ${message.from}: ${content}`);
+    }
+
+    // Only respond to DMs from admin
+    if (isDirectMessage && adminChatId && message.from !== adminChatId) {
+      console.log(`[${timestamp}] Ignoring DM from non-admin: ${message.from}`);
+      return;
     }
 
     if (isGroupMessage) {
+      // If TARGET_GROUP_ID is set in env, only respond to that group
+      if (targetGroupId && message.from !== targetGroupId) {
+        console.log(`[${timestamp}] Ignoring message from non-target group: ${message.from}`);
+        return;
+      }
+
+      // Auto-set target group if not configured
       if (!BOT_CONFIG.TARGET_GROUP_ID) {
-        BOT_CONFIG.TARGET_GROUP_ID = message.from;
-        botStatus.targetGroup = message.from;
+        BOT_CONFIG.TARGET_GROUP_ID = targetGroupId || message.from;
+        botStatus.targetGroup = BOT_CONFIG.TARGET_GROUP_ID;
         botStatus.targetGroupName = chat.name;
-        console.log(`Set target group to: ${chat.name} (${message.from})`);
+        console.log(`Set target group to: ${chat.name} (${BOT_CONFIG.TARGET_GROUP_ID})`);
       }
 
       // Commands
