@@ -109,7 +109,7 @@ console.log("[DEBUG] Creating WhatsApp client...");
 const client = new Client({
   authStrategy,
   puppeteer: {
-    headless: true,
+    headless: "new", // Use new headless mode for better compatibility
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     args: [
       "--no-sandbox",
@@ -120,13 +120,10 @@ const client = new Client({
       "--no-zygote",
       ...(process.platform === "win32" ? [] : ["--single-process"]),
       "--disable-gpu",
-      "--disable-web-security",
       "--disable-features=VizDisplayCompositor",
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      "--disable-extensions",
-      "--disable-plugins",
       "--disable-default-apps",
       "--disable-hang-monitor",
       "--disable-prompt-on-repost",
@@ -135,6 +132,8 @@ const client = new Client({
       "--no-default-browser-check",
       "--safebrowsing-disable-auto-update",
       "--disable-background-networking",
+      "--disable-infobars",
+      "--window-size=1920,1080",
     ],
   },
 });
