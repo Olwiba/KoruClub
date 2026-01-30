@@ -433,26 +433,21 @@ client.on("remote_session_saved", () => {
   console.log("✅ WhatsApp session saved to database");
 });
 
-// Manual session backup since RemoteAuth's internal backup is unreliable
-if (isProduction && store) {
+// Manual session backup function (called after auth)
+let backupIntervalId: NodeJS.Timeout | null = null;
+
+const startSessionBackup = () => {
+  if (!isProduction || !store || backupIntervalId) return;
+
   const sessionBackup = async () => {
     try {
       const authDir = "./.wwebjs_auth";
       const sessionDir = `${authDir}/RemoteAuth-koruclub`;
       const zipPath = `${authDir}/RemoteAuth-koruclub.zip`;
 
-      // List what's in the auth directory for debugging
-      if (fs.existsSync(authDir)) {
-        const contents = fs.readdirSync(authDir);
-        console.log(`[Session Backup] Auth dir contents: ${contents.join(", ") || "(empty)"}`);
-      } else {
-        console.log(`[Session Backup] Auth dir doesn't exist yet`);
-        return;
-      }
-
       // Check if session folder exists and has data
       if (!fs.existsSync(sessionDir)) {
-        console.log(`[Session Backup] Session dir not found: ${sessionDir}`);
+        console.log(`[Session Backup] Session dir not found yet`);
         return;
       }
 
@@ -462,7 +457,7 @@ if (isProduction && store) {
         return;
       }
 
-      console.log(`[Session Backup] Session dir has ${sessionContents.length} items, creating zip...`);
+      console.log(`[Session Backup] Creating backup (${sessionContents.length} items)...`);
 
       // Create zip manually using archiver
       const archiver = require("archiver");
@@ -488,12 +483,13 @@ if (isProduction && store) {
     }
   };
 
-  // Run backup every 2 minutes, starting 30 seconds after ready
+  // Initial backup after 10 seconds, then every 2 minutes
+  console.log("[Session Backup] Scheduling backups (first in 10s, then every 2min)");
   setTimeout(() => {
-    sessionBackup(); // Initial backup
-    setInterval(sessionBackup, 120000); // Then every 2 minutes
-  }, 30000);
-}
+    sessionBackup();
+    backupIntervalId = setInterval(sessionBackup, 120000);
+  }, 10000);
+};
 
 client.on("loading_screen", (percent: number, message: string) => {
   console.log(`Loading WhatsApp Web: ${percent}% - ${message}`);
@@ -509,6 +505,9 @@ client.on("ready", async () => {
     clearTimeout(readyBackupTimeout);
     readyBackupTimeout = null;
   }
+
+  // Start session backup scheduling (only after successful auth/ready)
+  startSessionBackup();
 
   // Send admin notification if configured - with retry
   const adminChatId = process.env.ADMIN_CHAT_ID;
@@ -838,6 +837,21 @@ async function main() {
   } catch (err) {
     console.error("Failed to connect to database:", err);
     process.exit(1);
+  }
+
+  // Clean up stale lockfiles from previous runs (prevents "browser already running" error)
+  const sessionDir = "./.wwebjs_auth/RemoteAuth-koruclub";
+  const lockFiles = ["lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"];
+  for (const lock of lockFiles) {
+    const lockPath = `${sessionDir}/${lock}`;
+    if (fs.existsSync(lockPath)) {
+      console.log(`Removing stale ${lock}...`);
+      try {
+        fs.unlinkSync(lockPath);
+      } catch (e) {
+        console.warn(`Could not remove ${lock}:`, e);
+      }
+    }
   }
 
   // Initialize WhatsApp client
