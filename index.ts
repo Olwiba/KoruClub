@@ -17,6 +17,14 @@ import {
 } from "./goalStore";
 import { initLLM, extractGoals, matchCompletions, generateResponse, isLLMReady } from "./llm";
 
+// Global error handlers to catch crashes
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("UNHANDLED REJECTION at:", promise, "reason:", reason);
+});
+
 // Environment check
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -658,7 +666,11 @@ async function main() {
   }
 
   // Initialize WhatsApp client
-  client.initialize();
+  client.initialize().catch((err: Error) => {
+    console.error("Client initialization failed:", err);
+  });
 }
 
-main();
+main().catch((err) => {
+  console.error("Main function failed:", err);
+});
