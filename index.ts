@@ -433,14 +433,66 @@ client.on("remote_session_saved", () => {
   console.log("✅ WhatsApp session saved to database");
 });
 
-// Log backup attempts for debugging
-if (isProduction) {
-  setInterval(() => {
-    const zipPath = "./.wwebjs_auth/RemoteAuth-koruclub.zip";
-    const exists = fs.existsSync(zipPath);
-    const size = exists ? fs.statSync(zipPath).size : 0;
-    console.log(`[Session Debug] Zip exists: ${exists}, size: ${size} bytes`);
-  }, 30000); // Check every 30s
+// Manual session backup since RemoteAuth's internal backup is unreliable
+if (isProduction && store) {
+  const sessionBackup = async () => {
+    try {
+      const authDir = "./.wwebjs_auth";
+      const sessionDir = `${authDir}/RemoteAuth-koruclub`;
+      const zipPath = `${authDir}/RemoteAuth-koruclub.zip`;
+
+      // List what's in the auth directory for debugging
+      if (fs.existsSync(authDir)) {
+        const contents = fs.readdirSync(authDir);
+        console.log(`[Session Backup] Auth dir contents: ${contents.join(", ") || "(empty)"}`);
+      } else {
+        console.log(`[Session Backup] Auth dir doesn't exist yet`);
+        return;
+      }
+
+      // Check if session folder exists and has data
+      if (!fs.existsSync(sessionDir)) {
+        console.log(`[Session Backup] Session dir not found: ${sessionDir}`);
+        return;
+      }
+
+      const sessionContents = fs.readdirSync(sessionDir);
+      if (sessionContents.length === 0) {
+        console.log(`[Session Backup] Session dir is empty`);
+        return;
+      }
+
+      console.log(`[Session Backup] Session dir has ${sessionContents.length} items, creating zip...`);
+
+      // Create zip manually using archiver
+      const archiver = require("archiver");
+      const output = fs.createWriteStream(zipPath);
+      const archive = archiver("zip", { zlib: { level: 9 } });
+
+      await new Promise<void>((resolve, reject) => {
+        output.on("close", () => {
+          console.log(`[Session Backup] Zip created: ${archive.pointer()} bytes`);
+          resolve();
+        });
+        archive.on("error", reject);
+        archive.pipe(output);
+        archive.directory(sessionDir, false);
+        archive.finalize();
+      });
+
+      // Now save to database
+      await store.save({ session: "RemoteAuth-koruclub" });
+      console.log(`[Session Backup] ✅ Session saved to database`);
+    } catch (error) {
+      console.error(`[Session Backup] Error:`, error);
+    }
+  };
+
+  // Run backup every 2 minutes, starting 30 seconds after ready
+  setTimeout(() => {
+    sessionBackup(); // Initial backup
+    setInterval(sessionBackup, 120000); // Then every 2 minutes
+  }, 30000);
 }
 
 client.on("loading_screen", (percent: number, message: string) => {
