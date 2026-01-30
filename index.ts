@@ -119,7 +119,7 @@ console.log("[DEBUG] Creating WhatsApp client...");
 const client = new Client({
   authStrategy,
   puppeteer: {
-    headless: true, // Use old headless mode - "new" mode has issues with wwebjs
+    headless: true,
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     args: [
       "--no-sandbox",
@@ -130,9 +130,6 @@ const client = new Client({
       "--no-zygote",
       ...(process.platform === "win32" ? [] : ["--single-process"]),
       "--disable-gpu",
-      "--disable-background-timer-throttling",
-      "--disable-backgrounding-occluded-windows",
-      "--disable-renderer-backgrounding",
     ],
   },
 });
@@ -416,14 +413,14 @@ client.on("authenticated", async () => {
   }
 
   // WORKAROUND: Known whatsapp-web.js bug where 'ready' event doesn't fire
-  // Manually emit 'ready' after 15 seconds if it hasn't fired
+  // Backup timeout - if ready doesn't fire in 10s, manually trigger
   readyBackupTimeout = setTimeout(() => {
     if (!isClientReady) {
-      console.log("[DEBUG] Ready event did not fire after 15s - manually triggering");
+      console.log("[DEBUG] Ready event did not fire after 10s - manually triggering");
       client.emit("ready");
     }
     readyBackupTimeout = null;
-  }, 15000);
+  }, 10000);
   
   // Attach browser console logging to see what's happening inside WhatsApp Web
   try {
@@ -476,18 +473,23 @@ client.on("ready", async () => {
     readyBackupTimeout = null;
   }
 
-  // Send admin notification if configured
+  // Send admin notification if configured - with retry
   const adminChatId = process.env.ADMIN_CHAT_ID;
   if (adminChatId) {
-    setTimeout(async () => {
+    const sendAdminNotification = async (attempt = 1) => {
       try {
-        // Use sendMessage directly - more reliable than getChatById right after ready
         await client.sendMessage(adminChatId, "✅ *Bot Online*\n\nKoruClub is now connected and ready.");
         console.log("Sent online notification to admin");
       } catch (err) {
-        console.error("Failed to send admin notification:", err);
+        console.error(`Failed to send admin notification (attempt ${attempt}):`, err);
+        if (attempt < 3) {
+          console.log(`Retrying admin notification in 10s...`);
+          setTimeout(() => sendAdminNotification(attempt + 1), 10000);
+        }
       }
-    }, 5000); // Wait 5s for WhatsApp to fully stabilize
+    };
+    // Wait 15s for WhatsApp to fully stabilize before first attempt
+    setTimeout(() => sendAdminNotification(), 15000);
   }
 
   // Initialize goal tracking
