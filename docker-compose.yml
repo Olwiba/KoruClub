@@ -29,6 +29,14 @@ services:
       start_period: 120s
       retries: 3
     restart: unless-stopped
+    networks:
+      - default
+      - coolify
+
+networks:
+  coolify:
+    external: true
+  default:
 
 volumes:
   ollama_data:
