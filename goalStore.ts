@@ -183,6 +183,68 @@ export const getUsersWithActiveGoals = async (): Promise<string[]> => {
   return goals.map((g) => g.userId);
 };
 
+// Get goal history for a user across multiple sprints
+export const getGoalHistory = async (
+  userId: string,
+  sprintCount: number = 3
+): Promise<{
+  sprints: {
+    sprintNumber: number;
+    goals: Goal[];
+    completed: number;
+    total: number;
+  }[];
+  patterns: {
+    frequentlyCompleted: string[];
+    frequentlyCarriedOver: string[];
+  };
+}> => {
+  const currentSprint = getCurrentSprintNumber();
+  const startSprint = Math.max(1, currentSprint - sprintCount + 1);
+
+  const allGoals = await db.goal.findMany({
+    where: {
+      userId,
+      sprintNum: { gte: startSprint, lte: currentSprint },
+    },
+    orderBy: { sprintNum: "desc" },
+  });
+
+  const mapped = allGoals.map(toGoal);
+
+  // Group by sprint
+  const sprintMap = new Map<number, Goal[]>();
+  for (let i = startSprint; i <= currentSprint; i++) {
+    sprintMap.set(i, []);
+  }
+  for (const goal of mapped) {
+    const existing = sprintMap.get(goal.sprintNumber) || [];
+    existing.push(goal);
+    sprintMap.set(goal.sprintNumber, existing);
+  }
+
+  const sprints = Array.from(sprintMap.entries())
+    .map(([sprintNumber, goals]) => ({
+      sprintNumber,
+      goals,
+      completed: goals.filter((g) => g.status === "completed").length,
+      total: goals.length,
+    }))
+    .sort((a, b) => b.sprintNumber - a.sprintNumber);
+
+  // Find patterns - simple keyword extraction from goal texts
+  const completedGoals = mapped.filter((g) => g.status === "completed").map((g) => g.text.toLowerCase());
+  const carriedOverGoals = mapped.filter((g) => g.status === "carried_over").map((g) => g.text.toLowerCase());
+
+  return {
+    sprints,
+    patterns: {
+      frequentlyCompleted: completedGoals.slice(0, 5),
+      frequentlyCarriedOver: carriedOverGoals.slice(0, 5),
+    },
+  };
+};
+
 // Get stats for a user
 export const getUserStats = async (
   userId: string

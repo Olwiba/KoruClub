@@ -14,8 +14,10 @@ import {
   getActiveGoals,
   completeGoal,
   getUsersWithActiveGoals,
+  getGoalHistory,
+  getUserStats,
 } from "./goalStore";
-import { initLLM, extractGoals, matchCompletions, generateResponse, isLLMReady } from "./llm";
+import { initLLM, extractGoals, matchCompletions, generateResponse, generateMentorship, isLLMReady } from "./llm";
 
 // Global error handlers to catch crashes
 process.on("uncaughtException", (err) => {
@@ -85,6 +87,7 @@ const BOT_CONFIG = {
   DEMO_COMMAND: "!bot demo",
   MONTHLY_COMMAND: "!bot monthly",
   GOALS_COMMAND: "!bot goals",
+  MENTOR_COMMAND: "!bot mentor",
   TARGET_GROUP_ID: "",
 };
 
@@ -94,7 +97,7 @@ const store = isProduction ? new PrismaStore() : null;
 const authStrategy = isProduction
   ? new RemoteAuth({
       store,
-      backupSyncIntervalMs: 300000, // 5 minutes
+      backupSyncIntervalMs: 60000, // 1 minute (faster initial save)
       clientId: "koruclub",
       dataPath: "./.wwebjs_auth",
     })
@@ -126,6 +129,8 @@ let schedulerActive = false;
 const scheduledJobs: Record<string, any> = {};
 let botStartTime: Date | null = null;
 let lastKickoffMessageId: string | null = null;
+let lastKickoffTime: Date | null = null;
+const KICKOFF_WINDOW_HOURS = 48;
 const COMPLETION_KEYWORDS = ["done", "finished", "completed", "shipped", "launched", "deployed", "✅", "🎉"];
 
 const botStatus = {
@@ -175,6 +180,12 @@ const getISOWeekNumber = (date: Date): number => {
 
 const isSprintWeek = (date: Date): boolean => {
   return getISOWeekNumber(date) % 2 === 1;
+};
+
+const isSecondSaturday = (date: Date): boolean => {
+  if (date.getDay() !== 6) return false; // Not Saturday
+  const dayOfMonth = date.getDate();
+  return dayOfMonth >= 8 && dayOfMonth <= 14;
 };
 
 const safelyGetChat = async (chatId: string): Promise<GroupChat | null> => {
@@ -271,7 +282,8 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
         );
         if (kickoffMsg) {
           lastKickoffMessageId = kickoffMsg.id._serialized;
-          console.log(`Tracking kickoff message: ${lastKickoffMessageId}`);
+          lastKickoffTime = new Date();
+          console.log(`Tracking kickoff message: ${lastKickoffMessageId}, window open for ${KICKOFF_WINDOW_HOURS}hrs`);
         }
         updateNextScheduledTasks();
       } catch (error) {
@@ -304,21 +316,28 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
       }
     });
 
-    // Demo day - first and third week Wednesday
-    scheduledJobs.biweekly = scheduleJob("0 9 * * 3", async () => {
+    // Demo day - second Saturday of month (middle Saturday, after first sprint)
+    const demoRule = new RecurrenceRule();
+    demoRule.dayOfWeek = 6; // Saturday
+    demoRule.hour = 10;
+    demoRule.minute = 0;
+    demoRule.tz = "Pacific/Auckland";
+
+    scheduledJobs.demo = scheduleJob("Demo Day", demoRule, async () => {
       try {
         const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" }));
-        const weekOfMonth = getWeekOfMonth(now);
-        if (weekOfMonth === 1 || weekOfMonth === 3) {
-          console.log(`Executing bi-weekly task at ${formatDate(now)} (Week ${weekOfMonth} of the month)`);
-          await retryScheduledTask(
-            "Bi-weekly demo",
-            "*Demo day*\n\n👉 Share what you've been cooking up!\n\nThere is no specific format. Could be a short vid, link, screenshot or picture. 🏆"
-          );
+        if (!isSecondSaturday(now)) {
+          console.log(`Skipping Demo Day - not second Saturday (day ${now.getDate()})`);
+          return;
         }
+        console.log(`Executing Demo Day at ${formatDate(now)}`);
+        await retryScheduledTask(
+          "Demo Day",
+          "*Demo Day* 🎬\n\n👉 Share what you've been cooking up!\n\nThere is no specific format. Could be a short vid, link, screenshot or picture. 🏆"
+        );
         updateNextScheduledTasks();
       } catch (error) {
-        console.error("Error in bi-weekly task:", error);
+        console.error("Error in Demo Day task:", error);
       }
     });
 
@@ -411,8 +430,18 @@ client.on("auth_failure", (msg: string) => {
 });
 
 client.on("remote_session_saved", () => {
-  console.log("WhatsApp session saved to database");
+  console.log("✅ WhatsApp session saved to database");
 });
+
+// Log backup attempts for debugging
+if (isProduction) {
+  setInterval(() => {
+    const zipPath = "./.wwebjs_auth/RemoteAuth-koruclub.zip";
+    const exists = fs.existsSync(zipPath);
+    const size = exists ? fs.statSync(zipPath).size : 0;
+    console.log(`[Session Debug] Zip exists: ${exists}, size: ${size} bytes`);
+  }, 30000); // Check every 30s
+}
 
 client.on("loading_screen", (percent: number, message: string) => {
   console.log(`Loading WhatsApp Web: ${percent}% - ${message}`);
@@ -556,13 +585,17 @@ client.on("message", async (message: Message) => {
           `📅 *${BOT_CONFIG.FRIDAY_COMMAND}* - Trigger Sprint Review\n` +
           `📅 *${BOT_CONFIG.DEMO_COMMAND}* - Trigger Demo Day\n` +
           `📅 *${BOT_CONFIG.MONTHLY_COMMAND}* - Trigger Monthly Celebration\n` +
-          `📋 *${BOT_CONFIG.GOALS_COMMAND}* - Show your active goals`;
+          `📋 *${BOT_CONFIG.GOALS_COMMAND}* - Show your active goals\n` +
+          `🧭 *${BOT_CONFIG.MENTOR_COMMAND}* - Get AI mentorship on your goals`;
         await chat.sendMessage(helpText);
       } else if (content === BOT_CONFIG.MONDAY_COMMAND) {
         console.log(`Manually triggering Sprint Kickoff at ${formatDate(new Date())}`);
-        await chat.sendMessage(
+        const kickoffMsg = await chat.sendMessage(
           "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
         );
+        lastKickoffMessageId = kickoffMsg.id._serialized;
+        lastKickoffTime = new Date();
+        console.log(`Tracking manual kickoff, window open for ${KICKOFF_WINDOW_HOURS}hrs`);
       } else if (content === BOT_CONFIG.FRIDAY_COMMAND) {
         console.log(`Manually triggering Sprint Review at ${formatDate(new Date())}`);
         await chat.sendMessage(
@@ -591,6 +624,42 @@ client.on("message", async (message: Message) => {
             `*Your Active Goals* 📋\n\n${goalsList}\n\n_Mark as done by posting an update with "done", "finished", or "completed"_`
           );
         }
+      } else if (content === BOT_CONFIG.MENTOR_COMMAND) {
+        const userId = message.author || message.from;
+
+        if (!isLLMReady()) {
+          await chat.sendMessage("🤖 AI mentor isn't available right now. Try again later!");
+          return;
+        }
+
+        const activeGoals = await getActiveGoals(userId);
+        const history = await getGoalHistory(userId, 3);
+        const stats = await getUserStats(userId);
+
+        if (stats.totalGoals === 0) {
+          await chat.sendMessage(
+            "🧭 I don't have any goal data for you yet!\n\nSet some goals in the next Sprint Kickoff and I'll be able to provide personalized mentorship."
+          );
+          return;
+        }
+
+        await chat.sendMessage("🧭 _Reviewing your goals and progress..._");
+
+        const mentorship = await generateMentorship({ activeGoals, history, stats });
+
+        if (mentorship) {
+          await chat.sendMessage(`*Your Mentor Check-in* 🧭\n\n${mentorship}`);
+        } else {
+          // Fallback if LLM fails
+          const completionEmoji = stats.completionRate >= 70 ? "🔥" : stats.completionRate >= 40 ? "👍" : "💪";
+          await chat.sendMessage(
+            `*Your Progress* 📊\n\n` +
+            `${completionEmoji} Completion rate: ${stats.completionRate}%\n` +
+            `🎯 Goals completed: ${stats.completedGoals}/${stats.totalGoals}\n` +
+            `🔥 Current streak: ${stats.currentStreak} sprints\n\n` +
+            `_Keep pushing! Every step counts._`
+          );
+        }
       } else if (!content.startsWith(BOT_CONFIG.COMMAND_PREFIX)) {
         // Non-command message - check for goal-related content
         const userId = message.author || message.from;
@@ -603,20 +672,35 @@ client.on("message", async (message: Message) => {
             quotedMsg.body.includes("Sprint Kickoff") ||
             quotedMsg.body.includes("What are your main goals"));
 
-        if (isReplyToKickoff && isLLMReady()) {
-          console.log(`[Goal Extraction] Processing goals from ${userId}`);
-          const extractedGoals = await extractGoals(content);
+        // Check if within 48-hour kickoff window
+        const isWithinKickoffWindow =
+          lastKickoffTime &&
+          Date.now() - lastKickoffTime.getTime() < KICKOFF_WINDOW_HOURS * 60 * 60 * 1000;
 
-          if (extractedGoals.length > 0) {
-            const newGoals = await addGoals(userId, extractedGoals);
-            console.log(`[Goal Extraction] Captured ${newGoals.length} goals for ${userId}`);
+        // Capture goals if replying to kickoff OR within the 48hr window
+        const shouldExtractGoals = isReplyToKickoff || isWithinKickoffWindow;
 
-            const response = await generateResponse("goal_captured", { goals: extractedGoals });
-            const goalsList = extractedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
+        if (shouldExtractGoals && isLLMReady()) {
+          // Check if user already has goals this sprint to avoid duplicates
+          const existingGoals = await getActiveGoals(userId);
+          const hasRecentGoals = existingGoals.length > 0;
 
-            await message.reply(
-              response || `✅ Got it! I've captured your goals:\n\n${goalsList}\n\n_I'll track these for you this sprint!_`
-            );
+          // Only auto-extract (non-reply) if user doesn't have goals yet
+          if (isReplyToKickoff || !hasRecentGoals) {
+            console.log(`[Goal Extraction] Processing goals from ${userId} (reply: ${isReplyToKickoff}, window: ${isWithinKickoffWindow})`);
+            const extractedGoals = await extractGoals(content);
+
+            if (extractedGoals.length > 0) {
+              const newGoals = await addGoals(userId, extractedGoals);
+              console.log(`[Goal Extraction] Captured ${newGoals.length} goals for ${userId}`);
+
+              const response = await generateResponse("goal_captured", { goals: extractedGoals });
+              const goalsList = extractedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
+
+              await message.reply(
+                response || `✅ Got it! I've captured your goals:\n\n${goalsList}\n\n_I'll track these for you this sprint!_`
+              );
+            }
           }
         }
 

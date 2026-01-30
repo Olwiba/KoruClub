@@ -175,4 +175,92 @@ export const generateResponse = async (
   }
 };
 
+// Generate mentorship/coaching based on goal history
+export const generateMentorship = async (data: {
+  activeGoals: Goal[];
+  history: {
+    sprints: {
+      sprintNumber: number;
+      goals: Goal[];
+      completed: number;
+      total: number;
+    }[];
+    patterns: {
+      frequentlyCompleted: string[];
+      frequentlyCarriedOver: string[];
+    };
+  };
+  stats: {
+    totalGoals: number;
+    completedGoals: number;
+    completionRate: number;
+    currentStreak: number;
+  };
+}): Promise<string | null> => {
+  if (!modelReady) {
+    return null;
+  }
+
+  try {
+    const { activeGoals, history, stats } = data;
+
+    // Build context for the LLM
+    const currentGoalsList = activeGoals.length > 0
+      ? activeGoals.map((g) => `- ${g.text}`).join("\n")
+      : "No active goals set yet";
+
+    const sprintHistory = history.sprints
+      .map((s) => `Sprint ${s.sprintNumber}: ${s.completed}/${s.total} completed`)
+      .join("\n");
+
+    const carriedOverList = history.patterns.frequentlyCarriedOver.length > 0
+      ? history.patterns.frequentlyCarriedOver.join(", ")
+      : "None";
+
+    const prompt = `You are a supportive mentor helping someone track their personal/professional goals in 2-week sprints.
+
+Here's their data:
+
+CURRENT SPRINT GOALS:
+${currentGoalsList}
+
+RECENT SPRINT HISTORY:
+${sprintHistory}
+
+STATS:
+- Completion rate: ${stats.completionRate}%
+- Current streak: ${stats.currentStreak} sprints with completions
+- Total goals set: ${stats.totalGoals}
+- Total completed: ${stats.completedGoals}
+
+GOALS THAT WERE CARRIED OVER (not completed):
+${carriedOverList}
+
+Based on this, provide brief personalized mentorship (3-5 sentences max). Consider:
+- Acknowledge their progress honestly
+- If they have incomplete goals, gently explore if they're too ambitious or need breaking down
+- If completion rate is high, celebrate that
+- If there are patterns (same goals carried over), suggest adjustments
+- Keep it casual, supportive, and actionable
+- End with one specific suggestion or question to reflect on
+
+Be concise and genuine, not generic motivational fluff.`;
+
+    const response = await ollama.generate({
+      model: MODEL,
+      prompt,
+      stream: false,
+      options: {
+        temperature: 0.7,
+        num_predict: 400,
+      },
+    });
+
+    return response.response.trim();
+  } catch (error) {
+    console.error("Error generating mentorship:", error);
+    return null;
+  }
+};
+
 export const isLLMReady = () => modelReady;
