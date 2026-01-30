@@ -35,16 +35,6 @@ const healthServer = createServer((req, res) => {
     const status = isClientReady ? 200 : 503;
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: isClientReady ? "ok" : "starting", ready: isClientReady }));
-  } else if (req.url === "/debug-screenshot") {
-    // Serve debug screenshot if it exists
-    try {
-      const screenshot = fs.readFileSync("/tmp/whatsapp-debug.png");
-      res.writeHead(200, { "Content-Type": "image/png" });
-      res.end(screenshot);
-    } catch {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Screenshot not found. Wait 10s after auth.");
-    }
   } else {
     res.writeHead(404);
     res.end();
@@ -99,9 +89,7 @@ const BOT_CONFIG = {
 };
 
 // Configure auth strategy based on environment
-console.log("[DEBUG] Setting up auth strategy...");
 const store = isProduction ? new PrismaStore() : null;
-if (store) console.log("[DEBUG] PrismaStore created");
 
 const authStrategy = isProduction
   ? new RemoteAuth({
@@ -115,7 +103,6 @@ const authStrategy = isProduction
 console.log(`Using ${isProduction ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
 
 // Create WhatsApp client
-console.log("[DEBUG] Creating WhatsApp client...");
 const client = new Client({
   authStrategy,
   puppeteer: {
@@ -390,17 +377,9 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
 };
 
 // WhatsApp event handlers
-console.log("[DEBUG] Registering event handlers...");
 
-let qrCount = 0;
 client.on("qr", (qr: string) => {
-  qrCount++;
-  // Clear previous QR by moving cursor up and clearing lines (ANSI escape codes)
-  if (qrCount > 1) {
-    // Move cursor up ~35 lines (QR height) and clear
-    process.stdout.write("\x1B[35A\x1B[0J");
-  }
-  console.log(`[QR #${qrCount}] Scan with WhatsApp mobile app:`);
+  console.log("Scan QR code with WhatsApp mobile app:");
   qrcode.generate(qr, { small: true });
 });
 
@@ -408,9 +387,7 @@ client.on("qr", (qr: string) => {
 let readyBackupTimeout: NodeJS.Timeout | null = null;
 
 client.on("authenticated", async () => {
-  console.log("[DEBUG] authenticated event fired");
   console.log("Authentication successful!");
-  console.log("Waiting for WhatsApp Web to load...");
   
   // Clear any existing backup timeout
   if (readyBackupTimeout) {
@@ -422,33 +399,11 @@ client.on("authenticated", async () => {
   // Backup timeout - if ready doesn't fire in 10s, manually trigger
   readyBackupTimeout = setTimeout(() => {
     if (!isClientReady) {
-      console.log("[DEBUG] Ready event did not fire after 10s - manually triggering");
+      console.log("Ready event timeout - manually triggering...");
       client.emit("ready");
     }
     readyBackupTimeout = null;
   }, 10000);
-  
-  // Attach browser console logging to see what's happening inside WhatsApp Web
-  try {
-    const page = client.pupPage;
-    if (page) {
-      page.on("console", (msg: any) => console.log("[BROWSER]", msg.text()));
-      page.on("pageerror", (err: any) => console.log("[BROWSER ERROR]", err.message));
-      console.log("[DEBUG] Browser console logging enabled");
-      
-      // Take a screenshot after 10 seconds to see what the page looks like
-      setTimeout(async () => {
-        try {
-          await page.screenshot({ path: "/tmp/whatsapp-debug.png" });
-          console.log("[DEBUG] Screenshot saved to /tmp/whatsapp-debug.png");
-        } catch (e) {
-          console.log("[DEBUG] Screenshot failed:", e);
-        }
-      }, 10000);
-    }
-  } catch (e) {
-    console.log("[DEBUG] Could not attach to browser page:", e);
-  }
 });
 
 client.on("auth_failure", (msg: string) => {
@@ -460,15 +415,10 @@ client.on("remote_session_saved", () => {
 });
 
 client.on("loading_screen", (percent: number, message: string) => {
-  console.log(`[DEBUG] loading_screen event: ${percent}% - ${message}`);
-});
-
-client.on("disconnected", (reason: string) => {
-  console.log("[DEBUG] disconnected event:", reason);
+  console.log(`Loading WhatsApp Web: ${percent}% - ${message}`);
 });
 
 client.on("ready", async () => {
-  console.log("[DEBUG] ready event fired");
   console.log("Client is ready! KoruClub is now active.");
   isClientReady = true;
   botStartTime = new Date();
@@ -520,7 +470,6 @@ client.on("disconnected", (reason: string) => {
 
 // Message handler
 client.on("message", async (message: Message) => {
-  console.log("[DEBUG] message event received:", message.body?.substring(0, 50));
   try {
     const chat = await message.getChat();
     const content = message.body.trim();
@@ -744,11 +693,9 @@ process.on("unhandledRejection", (reason, promise) => {
 
 // Main startup
 async function main() {
-  console.log("[DEBUG] main() starting...");
   console.log("Starting KoruClub...");
 
   // Connect to database
-  console.log("[DEBUG] Connecting to database...");
   try {
     await db.$connect();
     console.log("Database connected");
@@ -758,11 +705,9 @@ async function main() {
   }
 
   // Initialize WhatsApp client
-  console.log("[DEBUG] Calling client.initialize()...");
   client.initialize().catch((err: Error) => {
     console.error("Client initialization failed:", err);
   });
-  console.log("[DEBUG] client.initialize() called (async, continuing...)");
 }
 
 main().catch((err) => {
