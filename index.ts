@@ -93,10 +93,7 @@ console.log("[DEBUG] Setting up auth strategy...");
 const store = isProduction ? new PrismaStore() : null;
 if (store) console.log("[DEBUG] PrismaStore created");
 
-// TEMP: Force LocalAuth to test if RemoteAuth is causing the hang
-const USE_REMOTE_AUTH = false; // Set to true to re-enable RemoteAuth
-
-const authStrategy = isProduction && USE_REMOTE_AUTH
+const authStrategy = isProduction
   ? new RemoteAuth({
       store,
       backupSyncIntervalMs: 300000, // 5 minutes
@@ -105,7 +102,7 @@ const authStrategy = isProduction && USE_REMOTE_AUTH
     })
   : new LocalAuth({ dataPath: ".wwebjs_auth" });
 
-console.log(`Using ${isProduction && USE_REMOTE_AUTH ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
+console.log(`Using ${isProduction ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
 
 // Create WhatsApp client
 console.log("[DEBUG] Creating WhatsApp client...");
@@ -405,10 +402,32 @@ client.on("qr", (qr: string) => {
   console.log("QR code generated. Scan with WhatsApp mobile app.");
 });
 
-client.on("authenticated", () => {
+client.on("authenticated", async () => {
   console.log("[DEBUG] authenticated event fired");
   console.log("Authentication successful!");
   console.log("Waiting for WhatsApp Web to load...");
+  
+  // Attach browser console logging to see what's happening inside WhatsApp Web
+  try {
+    const page = client.pupPage;
+    if (page) {
+      page.on("console", (msg: any) => console.log("[BROWSER]", msg.text()));
+      page.on("pageerror", (err: any) => console.log("[BROWSER ERROR]", err.message));
+      console.log("[DEBUG] Browser console logging enabled");
+      
+      // Take a screenshot after 10 seconds to see what the page looks like
+      setTimeout(async () => {
+        try {
+          await page.screenshot({ path: "/tmp/whatsapp-debug.png" });
+          console.log("[DEBUG] Screenshot saved to /tmp/whatsapp-debug.png");
+        } catch (e) {
+          console.log("[DEBUG] Screenshot failed:", e);
+        }
+      }, 10000);
+    }
+  } catch (e) {
+    console.log("[DEBUG] Could not attach to browser page:", e);
+  }
 });
 
 client.on("auth_failure", (msg: string) => {
