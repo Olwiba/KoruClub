@@ -39,11 +39,25 @@ if (fs.existsSync(clientPath)) {
   console.log("❌ Client.js not found");
 }
 
-// Patch 2: Utils.js - Fix GroupMetadata and NewsletterMetadataCollection
+// Patch 2: Utils.js - Fix GroupMetadata, NewsletterMetadataCollection, and sendSeen
 const utilsPath = path.join(WWEBJS_PATH, "util", "Injected", "Utils.js");
 if (fs.existsSync(utilsPath)) {
   let utils = fs.readFileSync(utilsPath, "utf8");
   let patched = false;
+  
+  // Fix sendSeen - the markedUnread error (make it a no-op)
+  if (utils.includes("window.WWebJS.sendSeen = async (chatId) => {") && 
+      !utils.includes("// Patched: sendSeen disabled")) {
+    // Find the sendSeen function and replace it with a no-op
+    utils = utils.replace(
+      /window\.WWebJS\.sendSeen = async \(chatId\) => \{[\s\S]*?\n    \};/,
+      `window.WWebJS.sendSeen = async (chatId) => { // Patched: sendSeen disabled due to markedUnread bug
+        return true;
+    };`
+    );
+    patched = true;
+    console.log("✅ Patched Utils.js (sendSeen - disabled due to markedUnread bug)");
+  }
   
   // Fix GroupMetadata.update
   const oldGroup = `await window.Store.GroupMetadata.update(chatWid);`;
@@ -73,7 +87,7 @@ if (fs.existsSync(utilsPath)) {
   
   if (patched) {
     fs.writeFileSync(utilsPath, utils);
-  } else if (utils.includes("// Patched: Check existence of")) {
+  } else if (utils.includes("// Patched:")) {
     console.log("⏭️  Utils.js already patched");
   } else {
     console.log("⚠️  Utils.js: Could not find patterns to patch");
