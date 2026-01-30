@@ -44,7 +44,7 @@ const healthServer = createServer((req, res) => {
 });
 healthServer.listen(3000, () => console.log("Health server on :3000"));
 
-// Patch RemoteAuth to fix mkdir issue in production
+// Patch RemoteAuth to fix mkdir issue in production and clean lockfiles after extract
 if (isProduction) {
   try {
     const RemoteAuthPath = require.resolve("whatsapp-web.js/src/authStrategies/RemoteAuth");
@@ -64,6 +64,16 @@ if (isProduction) {
           .on("error", (err: Error) => reject(err))
           .on("finish", () => resolve(true));
       });
+
+      // Clean up lockfiles that cause "browser already running" errors
+      const lockFiles = ["lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"];
+      for (const lock of lockFiles) {
+        const lockPath = `${this.userDataDir}/${lock}`;
+        if (fs.existsSync(lockPath)) {
+          console.log(`[RemoteAuth] Removing ${lock} from restored session`);
+          fs.unlinkSync(lockPath);
+        }
+      }
 
       if (fs.existsSync(compressedSessionPath)) {
         await fs.promises.unlink(compressedSessionPath);
@@ -459,7 +469,7 @@ const startSessionBackup = () => {
 
       console.log(`[Session Backup] Creating backup (${sessionContents.length} items)...`);
 
-      // Create zip manually using archiver
+      // Create zip manually using archiver, excluding lockfiles
       const archiver = require("archiver");
       const output = fs.createWriteStream(zipPath);
       const archive = archiver("zip", { zlib: { level: 9 } });
@@ -471,7 +481,11 @@ const startSessionBackup = () => {
         });
         archive.on("error", reject);
         archive.pipe(output);
-        archive.directory(sessionDir, false);
+        // Exclude lockfiles that cause "browser already running" errors on restore
+        archive.glob("**/*", {
+          cwd: sessionDir,
+          ignore: ["lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"],
+        });
         archive.finalize();
       });
 
