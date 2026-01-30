@@ -392,10 +392,16 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
 // WhatsApp event handlers
 console.log("[DEBUG] Registering event handlers...");
 
+let qrCount = 0;
 client.on("qr", (qr: string) => {
-  console.log("[DEBUG] QR event received");
+  qrCount++;
+  // Clear previous QR by moving cursor up and clearing lines (ANSI escape codes)
+  if (qrCount > 1) {
+    // Move cursor up ~35 lines (QR height) and clear
+    process.stdout.write("\x1B[35A\x1B[0J");
+  }
+  console.log(`[QR #${qrCount}] Scan with WhatsApp mobile app:`);
   qrcode.generate(qr, { small: true });
-  console.log("QR code generated. Scan with WhatsApp mobile app.");
 });
 
 // Track backup timeout for ready event workaround
