@@ -393,6 +393,7 @@ client.on("loading_screen", (percent: number) => {
 
 client.on("authenticated", () => {
   console.log("Authentication successful!");
+  console.log("Waiting for WhatsApp Web to load...");
 });
 
 client.on("auth_failure", (msg: string) => {
@@ -401,6 +402,14 @@ client.on("auth_failure", (msg: string) => {
 
 client.on("remote_session_saved", () => {
   console.log("WhatsApp session saved to database");
+});
+
+client.on("loading_screen", (percent: number, message: string) => {
+  console.log(`Loading: ${percent}% - ${message}`);
+});
+
+client.on("disconnected", (reason: string) => {
+  console.log("Client disconnected:", reason);
 });
 
 client.on("ready", async () => {

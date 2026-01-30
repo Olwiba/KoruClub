@@ -19,18 +19,32 @@ export class PrismaStore {
   }
 
   async save(options: { session: string }): Promise<void> {
-    const filePath = `${options.session}.zip`;
+    // RemoteAuth may put the zip in different locations
+    const possiblePaths = [
+      `${options.session}.zip`,
+      `./.wwebjs_auth/${options.session}.zip`,
+      `.wwebjs_auth/${options.session}.zip`,
+    ];
+
+    let filePath: string | null = null;
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        filePath = p;
+        break;
+      }
+    }
+
     try {
-      if (fs.existsSync(filePath)) {
+      if (filePath) {
         const data = fs.readFileSync(filePath);
         await db.whatsappSession.upsert({
           where: { sessionId: options.session },
           update: { data },
           create: { sessionId: options.session, data },
         });
-        console.log(`WhatsApp session saved to database: ${options.session}`);
+        console.log(`WhatsApp session saved to database: ${options.session} (from ${filePath})`);
       } else {
-        console.warn(`Session zip file not found: ${filePath}`);
+        console.warn(`Session zip file not found. Checked: ${possiblePaths.join(", ")}`);
       }
     } catch (error) {
       console.error("Failed to save session to database:", error);
