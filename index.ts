@@ -119,7 +119,7 @@ console.log("[DEBUG] Creating WhatsApp client...");
 const client = new Client({
   authStrategy,
   puppeteer: {
-    headless: "new",
+    headless: true, // Use old headless mode - "new" mode has issues with wwebjs
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     args: [
       "--no-sandbox",
