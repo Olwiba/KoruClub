@@ -481,13 +481,13 @@ client.on("ready", async () => {
   if (adminChatId) {
     setTimeout(async () => {
       try {
-        const adminChat = await client.getChatById(adminChatId);
-        await adminChat.sendMessage("✅ *Bot Online*\n\nKoruClub is now connected and ready.");
+        // Use sendMessage directly - more reliable than getChatById right after ready
+        await client.sendMessage(adminChatId, "✅ *Bot Online*\n\nKoruClub is now connected and ready.");
         console.log("Sent online notification to admin");
       } catch (err) {
         console.error("Failed to send admin notification:", err);
       }
-    }, 2000);
+    }, 5000); // Wait 5s for WhatsApp to fully stabilize
   }
 
   // Initialize goal tracking
