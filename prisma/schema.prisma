@@ -1,0 +1,38 @@
+// Prisma Schema for KoruClub
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// WhatsApp Session - for RemoteAuth
+model WhatsappSession {
+  id        String   @id @default(cuid())
+  sessionId String   @unique @map("session_id")
+  data      Bytes
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("whatsapp_sessions")
+}
+
+// User Goals
+model Goal {
+  id          String    @id
+  userId      String    @map("user_id")
+  text        String
+  status      String    @default("active") // active, completed, carried_over
+  sprintNum   Int       @map("sprint_number")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([userId])
+  @@index([status])
+  @@index([sprintNum])
+  @@map("goals")
+}

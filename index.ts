@@ -1,8 +1,24 @@
-const { Client, LocalAuth } = require("whatsapp-web.js");
+// @ts-ignore - RemoteAuth exists at runtime but TypeScript types are incomplete
+const { Client, LocalAuth, RemoteAuth } = require("whatsapp-web.js");
 import type { Message, GroupChat } from "whatsapp-web.js";
 const qrcode = require("qrcode-terminal");
-const { scheduleJob, RecurrenceRule, Range } = require("node-schedule");
+const { scheduleJob, RecurrenceRule } = require("node-schedule");
 import { createServer } from "http";
+import fs from "fs";
+
+import { db } from "./db";
+import { PrismaStore } from "./store";
+import {
+  loadGoals,
+  addGoals,
+  getActiveGoals,
+  completeGoal,
+  getUsersWithActiveGoals,
+} from "./goalStore";
+import { initLLM, extractGoals, matchCompletions, generateResponse, isLLMReady } from "./llm";
+
+// Environment check
+const isProduction = process.env.NODE_ENV === "production";
 
 // Simple health check server
 let isClientReady = false;
@@ -18,18 +34,36 @@ const healthServer = createServer((req, res) => {
 });
 healthServer.listen(3000, () => console.log("Health server on :3000"));
 
-// Goal tracking imports
-import {
-  loadGoals,
-  addGoals,
-  getActiveGoals,
-  getCurrentSprintGoals,
-  completeGoal,
-  getSprintSummary,
-  getUsersWithActiveGoals,
-  type GoalStore,
-} from "./goalStore";
-import { initLLM, extractGoals, matchCompletions, generateResponse, isLLMReady } from "./llm";
+// Patch RemoteAuth to fix mkdir issue in production
+if (isProduction) {
+  try {
+    const RemoteAuthPath = require.resolve("whatsapp-web.js/src/authStrategies/RemoteAuth");
+    const RemoteAuthModule = require(RemoteAuthPath);
+    const unzipper = require("unzipper");
+
+    RemoteAuthModule.prototype.unCompressSession = async function (compressedSessionPath: string) {
+      const stream = fs.createReadStream(compressedSessionPath);
+
+      if (!fs.existsSync(this.userDataDir)) {
+        fs.mkdirSync(this.userDataDir, { recursive: true });
+      }
+
+      await new Promise((resolve, reject) => {
+        stream
+          .pipe(unzipper.Extract({ path: this.userDataDir }))
+          .on("error", (err: Error) => reject(err))
+          .on("finish", () => resolve(true));
+      });
+
+      if (fs.existsSync(compressedSessionPath)) {
+        await fs.promises.unlink(compressedSessionPath);
+      }
+    };
+    console.log("RemoteAuth patch applied");
+  } catch (err) {
+    console.error("Failed to patch RemoteAuth:", err);
+  }
+}
 
 // Bot configuration
 const BOT_CONFIG = {
@@ -43,16 +77,27 @@ const BOT_CONFIG = {
   DEMO_COMMAND: "!bot demo",
   MONTHLY_COMMAND: "!bot monthly",
   GOALS_COMMAND: "!bot goals",
-  TARGET_GROUP_ID: "", // This will be populated when the bot joins a group
+  TARGET_GROUP_ID: "",
 };
 
-// Create a new client instance
+// Configure auth strategy based on environment
+const authStrategy = isProduction
+  ? new RemoteAuth({
+      store: new PrismaStore(),
+      backupSyncIntervalMs: 300000, // 5 minutes
+      clientId: "koruclub",
+      dataPath: "./.wwebjs_auth",
+    })
+  : new LocalAuth({ dataPath: ".wwebjs_auth" });
+
+console.log(`Using ${isProduction ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
+
+// Create WhatsApp client
 const client = new Client({
-  authStrategy: new LocalAuth({
-    dataPath: ".wwebjs_auth",
-  }),
+  authStrategy,
   puppeteer: {
     headless: true,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -60,7 +105,7 @@ const client = new Client({
       "--disable-accelerated-2d-canvas",
       "--no-first-run",
       "--no-zygote",
-      "--single-process",
+      ...(process.platform === "win32" ? [] : ["--single-process"]),
       "--disable-gpu",
       "--disable-web-security",
       "--disable-features=VizDisplayCompositor",
@@ -81,75 +126,13 @@ const client = new Client({
   },
 });
 
-// Scheduler state management
+// State management
 let schedulerActive = false;
 const scheduledJobs: Record<string, any> = {};
 let botStartTime: Date | null = null;
-
-// Goal tracking state
-let goalStore: GoalStore = {};
 let lastKickoffMessageId: string | null = null;
 const COMPLETION_KEYWORDS = ["done", "finished", "completed", "shipped", "launched", "deployed", "✅", "🎉"];
 
-// Helper function to safely get chat for scheduled tasks
-const safelyGetChat = async (chatId: string): Promise<GroupChat | null> => {
-  try {
-    // Check if client is ready
-    if (!client.info || !client.info.wid) {
-      console.error("Client is not ready for scheduled task");
-      return null;
-    }
-
-    const chat = await client.getChatById(chatId);
-    if (!chat || !chat.isGroup) {
-      console.error("Target group chat not found or not a group");
-      return null;
-    }
-
-    return chat as GroupChat;
-  } catch (error) {
-    console.error("Error getting chat for scheduled task:", error);
-    return null;
-  }
-};
-
-// Helper function to retry scheduled task with backoff
-const retryScheduledTask = async (
-  taskName: string,
-  messageText: string,
-  maxRetries: number = 3,
-  baseDelay: number = 60000 // 1 minute
-): Promise<Message | null> => {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`${taskName}: Attempt ${attempt}/${maxRetries}`);
-
-      const groupChat = await safelyGetChat(BOT_CONFIG.TARGET_GROUP_ID);
-      if (!groupChat) {
-        throw new Error("Unable to get target group chat");
-      }
-
-      const sentMessage = await groupChat.sendMessage(messageText);
-      console.log(
-        `${taskName}: Message sent successfully on attempt ${attempt}`
-      );
-      return sentMessage;
-    } catch (error) {
-      console.error(`${taskName}: Attempt ${attempt} failed:`, error);
-
-      if (attempt < maxRetries) {
-        const delay = baseDelay * attempt; // Exponential backoff
-        console.log(`${taskName}: Retrying in ${delay / 1000} seconds...`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  console.error(`${taskName}: All ${maxRetries} attempts failed`);
-  return null;
-};
-
-// Initialize bot status
 const botStatus = {
   isActive: false,
   targetGroup: "",
@@ -159,16 +142,14 @@ const botStatus = {
     if (!botStartTime) return "0 minutes";
     const diffMs = Date.now() - botStartTime.getTime();
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    const diffHrs = Math.floor(
-      (diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
-    );
+    const diffHrs = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
     const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
     return `${diffDays} days, ${diffHrs} hours, ${diffMins} minutes`;
   },
   nextScheduledTasks: [] as string[],
 };
 
-// Helper function to format dates for logging
+// Helper functions
 const formatDate = (date: Date): string => {
   return date.toLocaleString("en-NZ", {
     timeZone: "Pacific/Auckland",
@@ -177,21 +158,18 @@ const formatDate = (date: Date): string => {
   });
 };
 
-// Function to check if a date is the last day of the month
 const isLastDayOfMonth = (date: Date): boolean => {
   const nextDay = new Date(date);
   nextDay.setDate(date.getDate() + 1);
   return nextDay.getDate() === 1;
 };
 
-// Function to determine the week number within the month
 const getWeekOfMonth = (date: Date): number => {
   const firstDayOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
   const dayOfWeek = firstDayOfMonth.getDay();
   return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// Function to get ISO week number (1-52)
 const getISOWeekNumber = (date: Date): number => {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -200,119 +178,144 @@ const getISOWeekNumber = (date: Date): number => {
   return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 };
 
-// Check if current week is a sprint week (odd ISO weeks)
 const isSprintWeek = (date: Date): boolean => {
   return getISOWeekNumber(date) % 2 === 1;
 };
 
-// Function to create, schedule and manage timer tasks
+const safelyGetChat = async (chatId: string): Promise<GroupChat | null> => {
+  try {
+    if (!client.info || !client.info.wid) {
+      console.error("Client is not ready for scheduled task");
+      return null;
+    }
+    const chat = await client.getChatById(chatId);
+    if (!chat || !chat.isGroup) {
+      console.error("Target group chat not found or not a group");
+      return null;
+    }
+    return chat as GroupChat;
+  } catch (error) {
+    console.error("Error getting chat for scheduled task:", error);
+    return null;
+  }
+};
+
+const retryScheduledTask = async (
+  taskName: string,
+  messageText: string,
+  maxRetries: number = 3,
+  baseDelay: number = 60000
+): Promise<Message | null> => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`${taskName}: Attempt ${attempt}/${maxRetries}`);
+      const groupChat = await safelyGetChat(BOT_CONFIG.TARGET_GROUP_ID);
+      if (!groupChat) throw new Error("Unable to get target group chat");
+      const sentMessage = await groupChat.sendMessage(messageText);
+      console.log(`${taskName}: Message sent successfully on attempt ${attempt}`);
+      return sentMessage;
+    } catch (error) {
+      console.error(`${taskName}: Attempt ${attempt} failed:`, error);
+      if (attempt < maxRetries) {
+        const delay = baseDelay * attempt;
+        console.log(`${taskName}: Retrying in ${delay / 1000} seconds...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  console.error(`${taskName}: All ${maxRetries} attempts failed`);
+  return null;
+};
+
+const updateNextScheduledTasks = () => {
+  botStatus.nextScheduledTasks = [];
+  Object.entries(scheduledJobs).forEach(([name, job]) => {
+    if (job && job.nextInvocation) {
+      const nextTime = job.nextInvocation();
+      if (nextTime) {
+        botStatus.nextScheduledTasks.push(`${name}: ${formatDate(nextTime)}`);
+      }
+    }
+  });
+  botStatus.nextScheduledTasks.sort();
+};
+
+// Scheduled messages setup
 const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
   if (schedulerActive) {
-    // Cancel any existing jobs if we're restarting
     Object.values(scheduledJobs).forEach((job) => job.cancel());
     Object.keys(scheduledJobs).forEach((key) => delete scheduledJobs[key]);
   }
 
-  // Store the target group ID from the initial chat
   if (!BOT_CONFIG.TARGET_GROUP_ID) {
     BOT_CONFIG.TARGET_GROUP_ID = initialGroupChat.id._serialized;
     botStatus.targetGroup = initialGroupChat.id._serialized;
     botStatus.targetGroupName = initialGroupChat.name;
-    console.log(
-      `Set target group to: ${initialGroupChat.name} (${initialGroupChat.id._serialized})`
-    );
+    console.log(`Set target group to: ${initialGroupChat.name} (${initialGroupChat.id._serialized})`);
   }
 
   try {
-    // 1. Bi-weekly Monday 9am NZT - Sprint kickoff (odd ISO weeks)
+    // Bi-weekly Monday 9am NZT - Sprint kickoff
     const mondayRule = new RecurrenceRule();
-    mondayRule.dayOfWeek = 1; // Monday
+    mondayRule.dayOfWeek = 1;
     mondayRule.hour = 9;
     mondayRule.minute = 0;
     mondayRule.tz = "Pacific/Auckland";
 
     scheduledJobs.monday = scheduleJob("Monday 9am", mondayRule, async () => {
       try {
-        const now = new Date(
-          new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
-        );
-
-        // Only execute on sprint weeks (odd ISO weeks)
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" }));
         if (!isSprintWeek(now)) {
           console.log(`Skipping Monday task - not a sprint week (week ${getISOWeekNumber(now)})`);
           return;
         }
-
         console.log(`Executing Sprint Kickoff at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
-
         const kickoffMsg = await retryScheduledTask(
           "Sprint Kickoff",
           "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
         );
-        
         if (kickoffMsg) {
           lastKickoffMessageId = kickoffMsg.id._serialized;
           console.log(`Tracking kickoff message: ${lastKickoffMessageId}`);
         }
-
         updateNextScheduledTasks();
       } catch (error) {
         console.error("Error in Sprint Kickoff task:", error);
       }
     });
 
-    // 2. Bi-weekly Friday 3:30pm NZT - Sprint review (even ISO weeks)
+    // Bi-weekly Friday 3:30pm NZT - Sprint review
     const fridayRule = new RecurrenceRule();
-    fridayRule.dayOfWeek = 5; // Friday
+    fridayRule.dayOfWeek = 5;
     fridayRule.hour = 15;
     fridayRule.minute = 30;
     fridayRule.tz = "Pacific/Auckland";
 
-    scheduledJobs.friday = scheduleJob(
-      "Friday 3:30pm",
-      fridayRule,
-      async () => {
-        try {
-          const now = new Date(
-            new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
-          );
-
-          // Only execute on sprint review weeks (even ISO weeks)
-          if (isSprintWeek(now)) {
-            console.log(`Skipping Friday task - not a review week (week ${getISOWeekNumber(now)})`);
-            return;
-          }
-
-          console.log(`Executing Sprint Review at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
-
-          await retryScheduledTask(
-            "Sprint Review",
-            "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉"
-          );
-
-          updateNextScheduledTasks();
-        } catch (error) {
-          console.error("Error in Sprint Review task:", error);
+    scheduledJobs.friday = scheduleJob("Friday 3:30pm", fridayRule, async () => {
+      try {
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" }));
+        if (isSprintWeek(now)) {
+          console.log(`Skipping Friday task - not a review week (week ${getISOWeekNumber(now)})`);
+          return;
         }
+        console.log(`Executing Sprint Review at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
+        await retryScheduledTask(
+          "Sprint Review",
+          "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉"
+        );
+        updateNextScheduledTasks();
+      } catch (error) {
+        console.error("Error in Sprint Review task:", error);
       }
-    );
+    });
 
-    // 3. First and third week of every month, on Wednesday at 9am NZT
+    // Demo day - first and third week Wednesday
     scheduledJobs.biweekly = scheduleJob("0 9 * * 3", async () => {
       try {
-        const now = new Date(
-          new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
-        );
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" }));
         const weekOfMonth = getWeekOfMonth(now);
-
-        // Only execute on the first and third weeks
         if (weekOfMonth === 1 || weekOfMonth === 3) {
-          console.log(
-            `Executing bi-weekly task at ${formatDate(
-              now
-            )} (Week ${weekOfMonth} of the month)`
-          );
-
+          console.log(`Executing bi-weekly task at ${formatDate(now)} (Week ${weekOfMonth} of the month)`);
           await retryScheduledTask(
             "Bi-weekly demo",
             "*Demo day*\n\n👉 Share what you've been cooking up!\n\nThere is no specific format. Could be a short vid, link, screenshot or picture. 🏆"
@@ -324,58 +327,38 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
       }
     });
 
-    // 4. Mid-sprint check-in (Wednesday of week 2 at 9am NZT)
+    // Mid-sprint check-in
     const checkInRule = new RecurrenceRule();
-    checkInRule.dayOfWeek = 3; // Wednesday
+    checkInRule.dayOfWeek = 3;
     checkInRule.hour = 9;
     checkInRule.minute = 0;
     checkInRule.tz = "Pacific/Auckland";
 
     scheduledJobs.checkIn = scheduleJob("Mid-sprint Check-in", checkInRule, async () => {
       try {
-        const now = new Date(
-          new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
-        );
-
-        // Only execute on week 2 of sprint (even ISO weeks)
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" }));
         if (isSprintWeek(now)) {
           console.log(`Skipping check-in - not mid-sprint (week ${getISOWeekNumber(now)})`);
           return;
         }
-
         console.log(`Executing Mid-sprint Check-in at ${formatDate(now)}`);
-
-        // Get users with active goals and mention them
-        const usersWithGoals = getUsersWithActiveGoals(goalStore);
-        if (usersWithGoals.length === 0) {
-          await retryScheduledTask(
-            "Mid-sprint Check-in",
-            "*Mid-Sprint Check-in* 📊\n\nHow's everyone tracking on their goals? Drop an update below! 👇"
-          );
-        } else {
-          await retryScheduledTask(
-            "Mid-sprint Check-in",
-            "*Mid-Sprint Check-in* 📊\n\nWe're halfway through the sprint! How's everyone tracking?\n\n👉 Share a quick update on your progress 👇"
-          );
-        }
-
+        const usersWithGoals = await getUsersWithActiveGoals();
+        const msg = usersWithGoals.length === 0
+          ? "*Mid-Sprint Check-in* 📊\n\nHow's everyone tracking on their goals? Drop an update below! 👇"
+          : "*Mid-Sprint Check-in* 📊\n\nWe're halfway through the sprint! How's everyone tracking?\n\n👉 Share a quick update on your progress 👇";
+        await retryScheduledTask("Mid-sprint Check-in", msg);
         updateNextScheduledTasks();
       } catch (error) {
         console.error("Error in Mid-sprint Check-in task:", error);
       }
     });
 
-    // 5. Last day of every month at 9am NZT
+    // Month end
     scheduledJobs.monthEnd = scheduleJob("0 9 * * *", async () => {
       try {
-        const now = new Date(
-          new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" })
-        );
-
-        // Only execute on the last day of the month
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Pacific/Auckland" }));
         if (isLastDayOfMonth(now)) {
           console.log(`Executing month-end task at ${formatDate(now)}`);
-
           await retryScheduledTask(
             "Monthly celebration",
             "*Monthly Celebration* 🎊\n\nAs we close out the month, take a moment to reflect on your accomplishments!\n\nBe proud of what you've achieved ✨"
@@ -391,7 +374,6 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     botStatus.isActive = true;
     botStatus.scheduledTasksCount = Object.keys(scheduledJobs).length;
     updateNextScheduledTasks();
-
     return true;
   } catch (error) {
     console.error("Error setting up scheduled messages:", error);
@@ -399,31 +381,12 @@ const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
   }
 };
 
-// Function to update the next scheduled tasks for diagnostics
-const updateNextScheduledTasks = () => {
-  botStatus.nextScheduledTasks = [];
-
-  // Get the next invocation time for each job
-  Object.entries(scheduledJobs).forEach(([name, job]) => {
-    if (job && job.nextInvocation) {
-      const nextTime = job.nextInvocation();
-      if (nextTime) {
-        botStatus.nextScheduledTasks.push(`${name}: ${formatDate(nextTime)}`);
-      }
-    }
-  });
-
-  // Sort by upcoming date
-  botStatus.nextScheduledTasks.sort();
-};
-
-// Generate QR code for authentication
+// WhatsApp event handlers
 client.on("qr", (qr: string) => {
   qrcode.generate(qr, { small: true });
   console.log("QR code generated. Scan with WhatsApp mobile app.");
 });
 
-// Connection event handlers
 client.on("loading_screen", (percent: number) => {
   console.log(`Loading: ${percent}%`);
 });
@@ -436,15 +399,18 @@ client.on("auth_failure", (msg: string) => {
   console.error("Authentication failed:", msg);
 });
 
+client.on("remote_session_saved", () => {
+  console.log("WhatsApp session saved to database");
+});
+
 client.on("ready", async () => {
   console.log("Client is ready! KoruClub is now active.");
   isClientReady = true;
   botStartTime = new Date();
-  
+
   // Initialize goal tracking
-  goalStore = loadGoals();
-  console.log(`Loaded ${Object.keys(goalStore).length} users with goals`);
-  
+  await loadGoals();
+
   // Initialize LLM (non-blocking)
   initLLM().then((ready) => {
     if (ready) {
@@ -457,6 +423,7 @@ client.on("ready", async () => {
 
 client.on("disconnected", (reason: string) => {
   console.log("Client disconnected:", reason);
+  isClientReady = false;
   schedulerActive = false;
   botStatus.isActive = false;
 });
@@ -468,8 +435,7 @@ client.on("message", async (message: Message) => {
     const content = message.body.trim();
     const isGroupMessage = message.from.endsWith("@g.us");
     const isDirectMessage = !isGroupMessage;
-    
-    // Log message reception with timestamp
+
     const timestamp = new Date().toISOString();
     if (isGroupMessage) {
       console.log(`[${timestamp}] Received group message from ${chat.name}`);
@@ -478,7 +444,6 @@ client.on("message", async (message: Message) => {
     }
 
     if (isGroupMessage) {
-      // Save this group as our target if not already set
       if (!BOT_CONFIG.TARGET_GROUP_ID) {
         BOT_CONFIG.TARGET_GROUP_ID = message.from;
         botStatus.targetGroup = message.from;
@@ -486,46 +451,32 @@ client.on("message", async (message: Message) => {
         console.log(`Set target group to: ${chat.name} (${message.from})`);
       }
 
-      // Handle group commands
+      // Commands
       if (content === BOT_CONFIG.START_COMMAND) {
         if (schedulerActive) {
-          await chat.sendMessage(
-            "🤖 I'm already running! The scheduled message service is active."
-          );
+          await chat.sendMessage("🤖 I'm already running! The scheduled message service is active.");
         } else {
           const success = await setupScheduledMessages(chat as GroupChat);
-          if (success) {
-            await chat.sendMessage(
-              "📆 Scheduled message service started! I will now post regular updates according to the schedule."
-            );
-          } else {
-            await chat.sendMessage(
-              "❌ Failed to start scheduled message service. Please check server logs."
-            );
-          }
+          await chat.sendMessage(
+            success
+              ? "📆 Scheduled message service started! I will now post regular updates according to the schedule."
+              : "❌ Failed to start scheduled message service. Please check server logs."
+          );
         }
       } else if (content === BOT_CONFIG.STOP_COMMAND) {
         if (!schedulerActive) {
-          await chat.sendMessage(
-            "🤖 I'm not currently running any scheduled messages."
-          );
+          await chat.sendMessage("🤖 I'm not currently running any scheduled messages.");
         } else {
-          // Cancel all scheduled jobs
           Object.values(scheduledJobs).forEach((job) => job.cancel());
           Object.keys(scheduledJobs).forEach((key) => delete scheduledJobs[key]);
-          
           schedulerActive = false;
           botStatus.isActive = false;
           botStatus.scheduledTasksCount = 0;
           botStatus.nextScheduledTasks = [];
-          
-          await chat.sendMessage(
-            "🛑 Scheduled message service stopped. All scheduled messages have been cancelled."
-          );
-          console.log("[" + new Date().toISOString() + "] Scheduled message service stopped by user command");
+          await chat.sendMessage("🛑 Scheduled message service stopped.");
+          console.log(`[${new Date().toISOString()}] Scheduled message service stopped by user command`);
         }
       } else if (content === BOT_CONFIG.STATUS_COMMAND) {
-        // Send diagnostic information
         const status =
           `*Bot Status Report*\n\n` +
           `🤖 Active: ${botStatus.isActive ? "Yes ✅" : "No ❌"}\n` +
@@ -534,87 +485,52 @@ client.on("message", async (message: Message) => {
           `📊 Scheduled Tasks: ${botStatus.scheduledTasksCount}\n\n` +
           `*Upcoming Messages:*\n${
             botStatus.nextScheduledTasks.length
-              ? botStatus.nextScheduledTasks
-                  .map((task) => `- ${task}`)
-                  .join("\n")
+              ? botStatus.nextScheduledTasks.map((task) => `- ${task}`).join("\n")
               : "No upcoming messages scheduled."
           }`;
-
         await chat.sendMessage(status);
       } else if (content === BOT_CONFIG.HELP_COMMAND) {
-        // Display available commands
         const helpText =
           `*Available Commands*\n\n` +
-          `📝 *${BOT_CONFIG.START_COMMAND}*\n` +
-          `Starts the scheduled messaging service.\n\n` +
-          `📊 *${BOT_CONFIG.STATUS_COMMAND}*\n` +
-          `Shows the current bot status and upcoming scheduled messages.\n\n` +
-          `🛟 *${BOT_CONFIG.HELP_COMMAND}*\n` +
-          `Displays this help message.\n\n` +
-          `🛑 *${BOT_CONFIG.STOP_COMMAND}*\n` +
-          `Stops the scheduled messaging service.\n\n` +
-          `📅 *${BOT_CONFIG.MONDAY_COMMAND}*\n` +
-          `Triggers the Sprint Kickoff message manually.\n\n` +
-          `📅 *${BOT_CONFIG.FRIDAY_COMMAND}*\n` +
-          `Triggers the Sprint Review message manually.\n\n` +
-          `📅 *${BOT_CONFIG.DEMO_COMMAND}*\n` +
-          `Triggers the biweekly demo day message manually.\n\n` +
-          `📅 *${BOT_CONFIG.MONTHLY_COMMAND}*\n` +
-          `Triggers the monthly celebration message manually.\n\n` +
-          `📋 *${BOT_CONFIG.GOALS_COMMAND}*\n` +
-          `Shows your current active goals.\n\n` +
-          `*Note:* You can also DM me *${BOT_CONFIG.STATUS_COMMAND}* for a private status update.`;
-
+          `📝 *${BOT_CONFIG.START_COMMAND}* - Start scheduled messaging\n` +
+          `📊 *${BOT_CONFIG.STATUS_COMMAND}* - Show bot status\n` +
+          `🛟 *${BOT_CONFIG.HELP_COMMAND}* - Show this help\n` +
+          `🛑 *${BOT_CONFIG.STOP_COMMAND}* - Stop scheduled messaging\n` +
+          `📅 *${BOT_CONFIG.MONDAY_COMMAND}* - Trigger Sprint Kickoff\n` +
+          `📅 *${BOT_CONFIG.FRIDAY_COMMAND}* - Trigger Sprint Review\n` +
+          `📅 *${BOT_CONFIG.DEMO_COMMAND}* - Trigger Demo Day\n` +
+          `📅 *${BOT_CONFIG.MONTHLY_COMMAND}* - Trigger Monthly Celebration\n` +
+          `📋 *${BOT_CONFIG.GOALS_COMMAND}* - Show your active goals`;
         await chat.sendMessage(helpText);
       } else if (content === BOT_CONFIG.MONDAY_COMMAND) {
-        // Manually trigger sprint kickoff message
-        console.log(
-          `Manually triggering Sprint Kickoff at ${formatDate(new Date())}`
-        );
+        console.log(`Manually triggering Sprint Kickoff at ${formatDate(new Date())}`);
         await chat.sendMessage(
           "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
         );
       } else if (content === BOT_CONFIG.FRIDAY_COMMAND) {
-        // Manually trigger sprint review message
-        console.log(
-          `Manually triggering Sprint Review at ${formatDate(new Date())}`
-        );
+        console.log(`Manually triggering Sprint Review at ${formatDate(new Date())}`);
         await chat.sendMessage(
           "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉"
         );
       } else if (content === BOT_CONFIG.DEMO_COMMAND) {
-        // Manually trigger biweekly demo day message
-        console.log(
-          `Manually triggering biweekly demo day message at ${formatDate(
-            new Date()
-          )}`
-        );
+        console.log(`Manually triggering Demo Day at ${formatDate(new Date())}`);
         await chat.sendMessage(
           "*Demo day*\n\n👉 Share what you've been cooking up!\n\nThere is no specific format. Could be a short vid, link, screenshot or picture. 🏆"
         );
       } else if (content === BOT_CONFIG.MONTHLY_COMMAND) {
-        // Manually trigger monthly celebration message
-        console.log(
-          `Manually triggering monthly celebration message at ${formatDate(
-            new Date()
-          )}`
-        );
+        console.log(`Manually triggering Monthly Celebration at ${formatDate(new Date())}`);
         await chat.sendMessage(
           "*Monthly Celebration* 🎊\n\nAs we close out the month, take a moment to reflect on your accomplishments!\n\nBe proud of what you've achieved ✨"
         );
       } else if (content === BOT_CONFIG.GOALS_COMMAND) {
-        // Show user's current goals
         const userId = message.author || message.from;
-        const activeGoals = getActiveGoals(goalStore, userId);
-        
+        const activeGoals = await getActiveGoals(userId);
         if (activeGoals.length === 0) {
           await chat.sendMessage(
             "📋 You don't have any active goals yet.\n\nReply to a Sprint Kickoff message to set your goals!"
           );
         } else {
-          const goalsList = activeGoals
-            .map((g, i) => `${i + 1}. ${g.text}`)
-            .join("\n");
+          const goalsList = activeGoals.map((g, i) => `${i + 1}. ${g.text}`).join("\n");
           await chat.sendMessage(
             `*Your Active Goals* 📋\n\n${goalsList}\n\n_Mark as done by posting an update with "done", "finished", or "completed"_`
           );
@@ -622,56 +538,55 @@ client.on("message", async (message: Message) => {
       } else if (!content.startsWith(BOT_CONFIG.COMMAND_PREFIX)) {
         // Non-command message - check for goal-related content
         const userId = message.author || message.from;
-        
-        // Check if this is a reply to a kickoff message (goal setting)
+
+        // Check if reply to kickoff (goal setting)
         const quotedMsg = await message.getQuotedMessage().catch(() => null);
-        const isReplyToKickoff = quotedMsg && 
+        const isReplyToKickoff =
+          quotedMsg &&
           (quotedMsg.id._serialized === lastKickoffMessageId ||
-           quotedMsg.body.includes("Sprint Kickoff") ||
-           quotedMsg.body.includes("What are your main goals"));
-        
+            quotedMsg.body.includes("Sprint Kickoff") ||
+            quotedMsg.body.includes("What are your main goals"));
+
         if (isReplyToKickoff && isLLMReady()) {
-          // Extract goals from the message
           console.log(`[Goal Extraction] Processing goals from ${userId}`);
           const extractedGoals = await extractGoals(content);
-          
+
           if (extractedGoals.length > 0) {
-            const newGoals = addGoals(goalStore, userId, extractedGoals);
+            const newGoals = await addGoals(userId, extractedGoals);
             console.log(`[Goal Extraction] Captured ${newGoals.length} goals for ${userId}`);
-            
-            // Acknowledge the goals
+
             const response = await generateResponse("goal_captured", { goals: extractedGoals });
             const goalsList = extractedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
-            
+
             await message.reply(
               response || `✅ Got it! I've captured your goals:\n\n${goalsList}\n\n_I'll track these for you this sprint!_`
             );
           }
         }
-        
+
         // Check for completion keywords
-        const hasCompletionKeyword = COMPLETION_KEYWORDS.some((kw) => 
+        const hasCompletionKeyword = COMPLETION_KEYWORDS.some((kw) =>
           content.toLowerCase().includes(kw.toLowerCase())
         );
-        
+
         if (hasCompletionKeyword && isLLMReady()) {
-          const activeGoals = getActiveGoals(goalStore, userId);
-          
+          const activeGoals = await getActiveGoals(userId);
+
           if (activeGoals.length > 0) {
             console.log(`[Completion Check] Checking message from ${userId} against ${activeGoals.length} goals`);
             const matches = await matchCompletions(content, activeGoals);
-            
+
             const completedGoals: string[] = [];
             for (const match of matches) {
               if (match.confidence === "high" || match.confidence === "medium") {
-                const goal = completeGoal(goalStore, userId, match.goalId);
+                const goal = await completeGoal(userId, match.goalId);
                 if (goal) {
                   completedGoals.push(goal.text);
                   console.log(`[Completion] Marked goal as done: ${goal.text}`);
                 }
               }
             }
-            
+
             if (completedGoals.length > 0) {
               const response = await generateResponse("goal_completed", { completedGoals });
               await message.react("🎉");
@@ -683,7 +598,6 @@ client.on("message", async (message: Message) => {
         }
       }
     } else if (isDirectMessage) {
-      // Handle direct message commands (admin only)
       if (content === BOT_CONFIG.STATUS_COMMAND) {
         const status =
           `*Bot Status Report*\n\n` +
@@ -691,24 +605,19 @@ client.on("message", async (message: Message) => {
           `⏱️ Uptime: ${botStatus.uptime()}\n` +
           `👥 Target Group: ${botStatus.targetGroupName || "Not set"}\n` +
           `📊 Scheduled Tasks: ${botStatus.scheduledTasksCount}\n\n` +
-          `*Upcoming Messages:*\n${botStatus.nextScheduledTasks.length
-            ? botStatus.nextScheduledTasks
-                .map((task) => `- ${task}`)
-                .join("\n")
-            : "No upcoming messages scheduled."
+          `*Upcoming Messages:*\n${
+            botStatus.nextScheduledTasks.length
+              ? botStatus.nextScheduledTasks.map((task) => `- ${task}`).join("\n")
+              : "No upcoming messages scheduled."
           }`;
-
         await chat.sendMessage(status);
         console.log(`[${new Date().toISOString()}] Sent status report via direct message`);
       } else if (content === BOT_CONFIG.HELP_COMMAND) {
         const helpText =
           `*Admin Commands (Direct Message)*\n\n` +
-          `📊 *${BOT_CONFIG.STATUS_COMMAND}*\n` +
-          `Shows the current bot status and upcoming scheduled messages.\n\n` +
-          `🛟 *${BOT_CONFIG.HELP_COMMAND}*\n` +
-          `Displays this help message.\n\n` +
+          `📊 *${BOT_CONFIG.STATUS_COMMAND}* - Show bot status\n` +
+          `🛟 *${BOT_CONFIG.HELP_COMMAND}* - Show this help\n\n` +
           `*Note:* Start/stop commands must be used in the target group chat.`;
-
         await chat.sendMessage(helpText);
       }
     }
@@ -726,6 +635,21 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason);
 });
 
-// Initialize the client
-console.log("Starting KoruClub...");
-client.initialize();
+// Main startup
+async function main() {
+  console.log("Starting KoruClub...");
+
+  // Connect to database
+  try {
+    await db.$connect();
+    console.log("Database connected");
+  } catch (err) {
+    console.error("Failed to connect to database:", err);
+    process.exit(1);
+  }
+
+  // Initialize WhatsApp client
+  client.initialize();
+}
+
+main();

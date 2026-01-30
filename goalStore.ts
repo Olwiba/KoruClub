@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
+import { db } from "./db";
+import type { Goal as PrismaGoal } from "@prisma/client";
 
 export interface Goal {
   id: string;
@@ -10,21 +11,16 @@ export interface Goal {
   sprintNumber: number;
 }
 
-interface GoalData {
-  goals: Goal[];
-}
-
-export type GoalStore = GoalData;
-
-const DATA_DIR = "./data";
-const DATA_FILE = `${DATA_DIR}/goals.json`;
-const TEMP_FILE = `${DATA_DIR}/goals.tmp.json`;
-
-// Atomic write to prevent corruption
-const saveData = (data: GoalData): void => {
-  writeFileSync(TEMP_FILE, JSON.stringify(data, null, 2));
-  renameSync(TEMP_FILE, DATA_FILE);
-};
+// Convert Prisma Goal to our Goal interface
+const toGoal = (g: PrismaGoal): Goal => ({
+  id: g.id,
+  userId: g.userId,
+  text: g.text,
+  status: g.status as "active" | "completed" | "carried_over",
+  createdAt: g.createdAt.toISOString(),
+  completedAt: g.completedAt?.toISOString() ?? null,
+  sprintNumber: g.sprintNum,
+});
 
 // Get current sprint number based on ISO week
 export const getCurrentSprintNumber = (): number => {
@@ -37,152 +33,169 @@ export const getCurrentSprintNumber = (): number => {
   return Math.ceil(weekNum / 2);
 };
 
-// Load goals from file
-export const loadGoals = (): GoalStore => {
-  if (!existsSync(DATA_DIR)) {
-    mkdirSync(DATA_DIR, { recursive: true });
-  }
-
-  if (!existsSync(DATA_FILE)) {
-    const initial: GoalData = { goals: [] };
-    saveData(initial);
-    console.log("Goals JSON initialized");
-    return initial;
-  }
-
-  try {
-    const raw = readFileSync(DATA_FILE, "utf-8");
-    const data = JSON.parse(raw) as GoalData;
-    console.log(`Loaded ${data.goals.length} goals from storage`);
-    return data;
-  } catch (err) {
-    console.error("Failed to load goals, starting fresh:", err);
-    const initial: GoalData = { goals: [] };
-    saveData(initial);
-    return initial;
-  }
+// Initialize goals (just logs count)
+export const loadGoals = async (): Promise<void> => {
+  const count = await db.goal.count();
+  console.log(`Goals DB ready: ${count} goals in database`);
 };
 
 // Add goals for a user
-export const addGoals = (
-  store: GoalStore,
-  userId: string,
-  goalTexts: string[]
-): Goal[] => {
+export const addGoals = async (userId: string, goalTexts: string[]): Promise<Goal[]> => {
   const sprintNum = getCurrentSprintNumber();
-  const now = new Date().toISOString();
+  const now = new Date();
   const newGoals: Goal[] = [];
 
-  goalTexts.forEach((text, idx) => {
-    const goal: Goal = {
-      id: `${userId}-${sprintNum}-${Date.now()}-${idx}`,
-      userId,
-      text,
-      status: "active",
-      createdAt: now,
-      completedAt: null,
-      sprintNumber: sprintNum,
-    };
-    store.goals.push(goal);
-    newGoals.push(goal);
-  });
+  for (let idx = 0; idx < goalTexts.length; idx++) {
+    const text = goalTexts[idx];
+    const id = `${userId}-${sprintNum}-${Date.now()}-${idx}`;
 
-  saveData(store);
+    const created = await db.goal.create({
+      data: {
+        id,
+        userId,
+        text,
+        status: "active",
+        sprintNum,
+        createdAt: now,
+      },
+    });
+
+    newGoals.push(toGoal(created));
+  }
+
   return newGoals;
 };
 
 // Get active goals for a user
-export const getActiveGoals = (store: GoalStore, userId: string): Goal[] => {
-  return store.goals.filter((g) => g.userId === userId && g.status === "active");
+export const getActiveGoals = async (userId: string): Promise<Goal[]> => {
+  const goals = await db.goal.findMany({
+    where: { userId, status: "active" },
+  });
+  return goals.map(toGoal);
 };
 
 // Get goals for current sprint
-export const getCurrentSprintGoals = (store: GoalStore, userId: string): Goal[] => {
+export const getCurrentSprintGoals = async (userId: string): Promise<Goal[]> => {
   const currentSprint = getCurrentSprintNumber();
-  return store.goals.filter(
-    (g) => g.userId === userId && g.sprintNumber === currentSprint && g.status === "active"
-  );
+  const goals = await db.goal.findMany({
+    where: {
+      userId,
+      sprintNum: currentSprint,
+      status: "active",
+    },
+  });
+  return goals.map(toGoal);
 };
 
 // Mark a goal as completed
-export const completeGoal = (store: GoalStore, userId: string, goalId: string): Goal | null => {
-  const goal = store.goals.find((g) => g.id === goalId && g.userId === userId);
-  if (!goal) return null;
+export const completeGoal = async (userId: string, goalId: string): Promise<Goal | null> => {
+  try {
+    const updated = await db.goal.update({
+      where: { id: goalId },
+      data: {
+        status: "completed",
+        completedAt: new Date(),
+      },
+    });
 
-  goal.status = "completed";
-  goal.completedAt = new Date().toISOString();
-  saveData(store);
-  return goal;
+    if (updated.userId !== userId) {
+      return null;
+    }
+
+    return toGoal(updated);
+  } catch {
+    return null;
+  }
 };
 
 // Carry over incomplete goals to next sprint
-export const carryOverGoals = (store: GoalStore, userId: string): Goal[] => {
+export const carryOverGoals = async (userId: string): Promise<Goal[]> => {
   const currentSprint = getCurrentSprintNumber();
-  const now = new Date().toISOString();
-  const carriedOver: Goal[] = [];
+  const now = new Date();
 
   // Find old active goals
-  const oldGoals = store.goals.filter(
-    (g) => g.userId === userId && g.status === "active" && g.sprintNumber < currentSprint
-  );
+  const oldGoals = await db.goal.findMany({
+    where: {
+      userId,
+      status: "active",
+      sprintNum: { lt: currentSprint },
+    },
+  });
 
   if (oldGoals.length === 0) return [];
 
-  // Mark old goals as carried over and create new ones
-  oldGoals.forEach((old, idx) => {
-    old.status = "carried_over";
+  const carriedOver: Goal[] = [];
 
-    const newGoal: Goal = {
-      id: `${userId}-${currentSprint}-${Date.now()}-carried-${idx}`,
-      userId,
-      text: old.text,
-      status: "active",
-      createdAt: now,
-      completedAt: null,
-      sprintNumber: currentSprint,
-    };
-    store.goals.push(newGoal);
-    carriedOver.push(newGoal);
-  });
+  for (let idx = 0; idx < oldGoals.length; idx++) {
+    const old = oldGoals[idx];
 
-  saveData(store);
+    // Mark old goal as carried over
+    await db.goal.update({
+      where: { id: old.id },
+      data: { status: "carried_over" },
+    });
+
+    // Create new goal in current sprint
+    const newGoal = await db.goal.create({
+      data: {
+        id: `${userId}-${currentSprint}-${Date.now()}-carried-${idx}`,
+        userId,
+        text: old.text,
+        status: "active",
+        sprintNum: currentSprint,
+        createdAt: now,
+      },
+    });
+
+    carriedOver.push(toGoal(newGoal));
+  }
+
   return carriedOver;
 };
 
 // Get sprint summary for a user
-export const getSprintSummary = (
-  store: GoalStore,
+export const getSprintSummary = async (
   userId: string,
   sprintNumber?: number
-): { completed: Goal[]; active: Goal[]; carriedOver: Goal[] } => {
+): Promise<{ completed: Goal[]; active: Goal[]; carriedOver: Goal[] }> => {
   const sprint = sprintNumber ?? getCurrentSprintNumber();
-  const goals = store.goals.filter((g) => g.userId === userId && g.sprintNumber === sprint);
+
+  const goals = await db.goal.findMany({
+    where: { userId, sprintNum: sprint },
+  });
+
+  const mapped = goals.map(toGoal);
 
   return {
-    completed: goals.filter((g) => g.status === "completed"),
-    active: goals.filter((g) => g.status === "active"),
-    carriedOver: goals.filter((g) => g.status === "carried_over"),
+    completed: mapped.filter((g) => g.status === "completed"),
+    active: mapped.filter((g) => g.status === "active"),
+    carriedOver: mapped.filter((g) => g.status === "carried_over"),
   };
 };
 
 // Get all users with active goals
-export const getUsersWithActiveGoals = (store: GoalStore): string[] => {
-  const users = new Set<string>();
-  store.goals.filter((g) => g.status === "active").forEach((g) => users.add(g.userId));
-  return Array.from(users);
+export const getUsersWithActiveGoals = async (): Promise<string[]> => {
+  const goals = await db.goal.findMany({
+    where: { status: "active" },
+    select: { userId: true },
+    distinct: ["userId"],
+  });
+  return goals.map((g) => g.userId);
 };
 
 // Get stats for a user
-export const getUserStats = (
-  store: GoalStore,
+export const getUserStats = async (
   userId: string
-): {
+): Promise<{
   totalGoals: number;
   completedGoals: number;
   completionRate: number;
   currentStreak: number;
-} => {
-  const userGoals = store.goals.filter((g) => g.userId === userId);
+}> => {
+  const userGoals = await db.goal.findMany({
+    where: { userId },
+  });
+
   const total = userGoals.length;
   const completed = userGoals.filter((g) => g.status === "completed").length;
   const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -192,7 +205,7 @@ export const getUserStats = (
     ...new Set(
       userGoals
         .filter((g) => g.status === "completed")
-        .map((g) => g.sprintNumber)
+        .map((g) => g.sprintNum)
     ),
   ].sort((a, b) => b - a);
 
