@@ -35,6 +35,16 @@ const healthServer = createServer((req, res) => {
     const status = isClientReady ? 200 : 503;
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: isClientReady ? "ok" : "starting", ready: isClientReady }));
+  } else if (req.url === "/debug-screenshot") {
+    // Serve debug screenshot if it exists
+    try {
+      const screenshot = fs.readFileSync("/tmp/whatsapp-debug.png");
+      res.writeHead(200, { "Content-Type": "image/png" });
+      res.end(screenshot);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Screenshot not found. Wait 10s after auth.");
+    }
   } else {
     res.writeHead(404);
     res.end();
@@ -109,7 +119,7 @@ console.log("[DEBUG] Creating WhatsApp client...");
 const client = new Client({
   authStrategy,
   puppeteer: {
-    headless: "new", // Use new headless mode for better compatibility
+    headless: "new",
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     args: [
       "--no-sandbox",
@@ -120,20 +130,9 @@ const client = new Client({
       "--no-zygote",
       ...(process.platform === "win32" ? [] : ["--single-process"]),
       "--disable-gpu",
-      "--disable-features=VizDisplayCompositor",
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      "--disable-default-apps",
-      "--disable-hang-monitor",
-      "--disable-prompt-on-repost",
-      "--disable-sync",
-      "--metrics-recording-only",
-      "--no-default-browser-check",
-      "--safebrowsing-disable-auto-update",
-      "--disable-background-networking",
-      "--disable-infobars",
-      "--window-size=1920,1080",
     ],
   },
 });
@@ -402,10 +401,29 @@ client.on("qr", (qr: string) => {
   console.log("QR code generated. Scan with WhatsApp mobile app.");
 });
 
+// Track backup timeout for ready event workaround
+let readyBackupTimeout: NodeJS.Timeout | null = null;
+
 client.on("authenticated", async () => {
   console.log("[DEBUG] authenticated event fired");
   console.log("Authentication successful!");
   console.log("Waiting for WhatsApp Web to load...");
+  
+  // Clear any existing backup timeout
+  if (readyBackupTimeout) {
+    clearTimeout(readyBackupTimeout);
+    readyBackupTimeout = null;
+  }
+
+  // WORKAROUND: Known whatsapp-web.js bug where 'ready' event doesn't fire
+  // Manually emit 'ready' after 15 seconds if it hasn't fired
+  readyBackupTimeout = setTimeout(() => {
+    if (!isClientReady) {
+      console.log("[DEBUG] Ready event did not fire after 15s - manually triggering");
+      client.emit("ready");
+    }
+    readyBackupTimeout = null;
+  }, 15000);
   
   // Attach browser console logging to see what's happening inside WhatsApp Web
   try {
@@ -451,6 +469,12 @@ client.on("ready", async () => {
   console.log("Client is ready! KoruClub is now active.");
   isClientReady = true;
   botStartTime = new Date();
+
+  // Clear backup timeout since ready fired naturally
+  if (readyBackupTimeout) {
+    clearTimeout(readyBackupTimeout);
+    readyBackupTimeout = null;
+  }
 
   // Initialize goal tracking
   await loadGoals();
