@@ -404,6 +404,15 @@ client.on("qr", (qr: string) => {
   qrcode.generate(qr, { small: true });
 });
 
+// Debug: Catch ALL events to see what's happening
+const originalEmit = client.emit.bind(client);
+client.emit = function(event: string, ...args: any[]) {
+  if (!["change_state"].includes(event)) { // Filter out noisy events
+    console.log(`[Event] ${event}`);
+  }
+  return originalEmit(event, ...args);
+};
+
 // Debug: Log all incoming messages at the raw level
 client.on("message", (msg: Message) => {
   console.log(`[Raw message event] from=${msg.from}, body=${msg.body?.substring(0, 30)}`);
