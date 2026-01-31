@@ -17,11 +17,10 @@ RUN apt-get update \
 # Create app directory
 WORKDIR /app
 
-# Copy package files and scripts (needed for postinstall patch)
+# Copy package files
 COPY package.json bun.lockb ./
-COPY scripts ./scripts
 
-# Install dependencies (runs postinstall to patch whatsapp-web.js)
+# Install dependencies
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 RUN bun install --frozen-lockfile --production
 
