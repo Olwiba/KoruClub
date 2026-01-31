@@ -2,9 +2,9 @@
   "name": "koruclub",
   "version": "1.0.0",
   "scripts": {
-    "dev": "bun run --watch index.ts",
+    "dev": "bun run --watch src/index.ts",
     "build": "prisma generate",
-    "start": "bun run index.ts",
+    "start": "bun run src/index.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",

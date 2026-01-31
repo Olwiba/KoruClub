@@ -1,5 +1,6 @@
 import { Ollama } from "ollama";
 import type { Goal } from "./goalStore";
+import { getDBSummaryForLLM } from "./goalStore";
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
 const MODEL = process.env.OLLAMA_MODEL || "qwen2:0.5b";
@@ -13,12 +14,12 @@ export const initLLM = async (): Promise<boolean> => {
   try {
     const models = await ollama.list();
     const hasModel = models.models.some((m: { name: string }) => m.name.startsWith(MODEL.split(":")[0]));
-    
+
     if (!hasModel) {
       console.log(`Model ${MODEL} not found, pulling...`);
       await ollama.pull({ model: MODEL });
     }
-    
+
     modelReady = true;
     console.log(`LLM ready: ${MODEL}`);
     return true;
@@ -56,17 +57,16 @@ Return ONLY the JSON array:`,
       },
     });
 
-    // Parse the response - try to extract JSON array
     const text = response.response.trim();
     const match = text.match(/\[[\s\S]*\]/);
-    
+
     if (match) {
       const goals = JSON.parse(match[0]);
       if (Array.isArray(goals)) {
         return goals.filter((g) => typeof g === "string" && g.length > 0);
       }
     }
-    
+
     console.warn("Could not parse goals from LLM response:", text);
     return [];
   } catch (error) {
@@ -85,9 +85,7 @@ export const matchCompletions = async (
   }
 
   try {
-    const goalsText = activeGoals
-      .map((g, i) => `${i + 1}. [${g.id}] ${g.text}`)
-      .join("\n");
+    const goalsText = activeGoals.map((g, i) => `${i + 1}. [${g.id}] ${g.text}`).join("\n");
 
     const response = await ollama.generate({
       model: MODEL,
@@ -114,19 +112,17 @@ Return ONLY the JSON array:`,
 
     const text = response.response.trim();
     const match = text.match(/\[[\s\S]*\]/);
-    
+
     if (match) {
       const matches = JSON.parse(match[0]);
       if (Array.isArray(matches)) {
         return matches.filter(
           (m) =>
-            m.goalId &&
-            activeGoals.some((g) => g.id === m.goalId) &&
-            ["high", "medium", "low"].includes(m.confidence)
+            m.goalId && activeGoals.some((g) => g.id === m.goalId) && ["high", "medium", "low"].includes(m.confidence)
         );
       }
     }
-    
+
     return [];
   } catch (error) {
     console.error("Error matching completions:", error);
@@ -145,7 +141,7 @@ export const generateResponse = async (
 
   try {
     let prompt = "";
-    
+
     switch (context) {
       case "goal_captured":
         prompt = `Generate a brief (1-2 sentences) encouraging acknowledgment for someone who just set these sprint goals: ${data.goals?.join(", ")}. Be casual and supportive. Include one relevant emoji.`;
@@ -204,18 +200,13 @@ export const generateMentorship = async (data: {
   try {
     const { activeGoals, history, stats } = data;
 
-    // Build context for the LLM
-    const currentGoalsList = activeGoals.length > 0
-      ? activeGoals.map((g) => `- ${g.text}`).join("\n")
-      : "No active goals set yet";
+    const currentGoalsList =
+      activeGoals.length > 0 ? activeGoals.map((g) => `- ${g.text}`).join("\n") : "No active goals set yet";
 
-    const sprintHistory = history.sprints
-      .map((s) => `Sprint ${s.sprintNumber}: ${s.completed}/${s.total} completed`)
-      .join("\n");
+    const sprintHistory = history.sprints.map((s) => `Sprint ${s.sprintNumber}: ${s.completed}/${s.total} completed`).join("\n");
 
-    const carriedOverList = history.patterns.frequentlyCarriedOver.length > 0
-      ? history.patterns.frequentlyCarriedOver.join(", ")
-      : "None";
+    const carriedOverList =
+      history.patterns.frequentlyCarriedOver.length > 0 ? history.patterns.frequentlyCarriedOver.join(", ") : "None";
 
     const prompt = `You are a supportive mentor helping someone track their personal/professional goals in 2-week sprints.
 
@@ -260,6 +251,52 @@ Be concise and genuine, not generic motivational fluff.`;
   } catch (error) {
     console.error("Error generating mentorship:", error);
     return null;
+  }
+};
+
+// ============================================
+// ADMIN CHAT - Conversational DB queries
+// ============================================
+
+// Admin can have a conversation with the LLM about the database
+export const adminChat = async (message: string): Promise<string> => {
+  if (!modelReady) {
+    return "LLM is not available right now. Please try again later.";
+  }
+
+  try {
+    // Get current DB context
+    const dbSummary = await getDBSummaryForLLM();
+
+    const prompt = `You are an AI assistant for KoruClub, a goal-tracking bot for a WhatsApp group running bi-weekly sprints.
+
+You have access to the following database information:
+
+${dbSummary}
+
+The admin is asking you a question about the data. Answer helpfully and concisely.
+If they ask about specific users, use the last 6 characters of user IDs for privacy (shown as "User abc123").
+If they ask for analysis or suggestions, provide actionable insights.
+If they ask about something not in the data, say so.
+
+Admin's question: "${message}"
+
+Your response:`;
+
+    const response = await ollama.generate({
+      model: MODEL,
+      prompt,
+      stream: false,
+      options: {
+        temperature: 0.5,
+        num_predict: 600,
+      },
+    });
+
+    return response.response.trim();
+  } catch (error) {
+    console.error("Error in admin chat:", error);
+    return "Sorry, I encountered an error processing your question. Please try again.";
   }
 };
 

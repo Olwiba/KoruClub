@@ -29,7 +29,7 @@ export const getCurrentSprintNumber = (): number => {
   const dayNum = d.getUTCDay() || 7;
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  const weekNum = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
   return Math.ceil(weekNum / 2);
 };
 
@@ -113,7 +113,6 @@ export const carryOverGoals = async (userId: string): Promise<Goal[]> => {
   const currentSprint = getCurrentSprintNumber();
   const now = new Date();
 
-  // Find old active goals
   const oldGoals = await db.goal.findMany({
     where: {
       userId,
@@ -129,13 +128,11 @@ export const carryOverGoals = async (userId: string): Promise<Goal[]> => {
   for (let idx = 0; idx < oldGoals.length; idx++) {
     const old = oldGoals[idx];
 
-    // Mark old goal as carried over
     await db.goal.update({
       where: { id: old.id },
       data: { status: "carried_over" },
     });
 
-    // Create new goal in current sprint
     const newGoal = await db.goal.create({
       data: {
         id: `${userId}-${currentSprint}-${Date.now()}-carried-${idx}`,
@@ -212,7 +209,6 @@ export const getGoalHistory = async (
 
   const mapped = allGoals.map(toGoal);
 
-  // Group by sprint
   const sprintMap = new Map<number, Goal[]>();
   for (let i = startSprint; i <= currentSprint; i++) {
     sprintMap.set(i, []);
@@ -232,7 +228,6 @@ export const getGoalHistory = async (
     }))
     .sort((a, b) => b.sprintNumber - a.sprintNumber);
 
-  // Find patterns - simple keyword extraction from goal texts
   const completedGoals = mapped.filter((g) => g.status === "completed").map((g) => g.text.toLowerCase());
   const carriedOverGoals = mapped.filter((g) => g.status === "carried_over").map((g) => g.text.toLowerCase());
 
@@ -262,13 +257,8 @@ export const getUserStats = async (
   const completed = userGoals.filter((g) => g.status === "completed").length;
   const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  // Calculate streak (consecutive sprints with completions)
   const sprintsWithCompletions = [
-    ...new Set(
-      userGoals
-        .filter((g) => g.status === "completed")
-        .map((g) => g.sprintNum)
-    ),
+    ...new Set(userGoals.filter((g) => g.status === "completed").map((g) => g.sprintNum)),
   ].sort((a, b) => b - a);
 
   let streak = 0;
@@ -287,4 +277,153 @@ export const getUserStats = async (
     completionRate,
     currentStreak: streak,
   };
+};
+
+// ============================================
+// ADMIN STATS - Aggregate statistics for admin
+// ============================================
+
+export interface AdminStats {
+  totalUsers: number;
+  totalGoals: number;
+  activeGoals: number;
+  completedGoals: number;
+  carriedOverGoals: number;
+  overallCompletionRate: number;
+  currentSprintNumber: number;
+  currentSprintStats: {
+    goals: number;
+    completed: number;
+    activeUsers: number;
+  };
+  topPerformers: {
+    userId: string;
+    completedGoals: number;
+    completionRate: number;
+  }[];
+  recentActivity: {
+    goalsSetLast7Days: number;
+    goalsCompletedLast7Days: number;
+  };
+}
+
+export const getAdminStats = async (): Promise<AdminStats> => {
+  const currentSprint = getCurrentSprintNumber();
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  // Get all goals
+  const allGoals = await db.goal.findMany();
+
+  // Total unique users
+  const uniqueUsers = [...new Set(allGoals.map((g) => g.userId))];
+
+  // Status counts
+  const activeGoals = allGoals.filter((g) => g.status === "active").length;
+  const completedGoals = allGoals.filter((g) => g.status === "completed").length;
+  const carriedOverGoals = allGoals.filter((g) => g.status === "carried_over").length;
+
+  // Current sprint stats
+  const currentSprintGoals = allGoals.filter((g) => g.sprintNum === currentSprint);
+  const currentSprintUsers = [...new Set(currentSprintGoals.map((g) => g.userId))];
+  const currentSprintCompleted = currentSprintGoals.filter((g) => g.status === "completed").length;
+
+  // Overall completion rate (completed / total excluding carried_over which are duplicates)
+  const totalNonCarried = allGoals.filter((g) => g.status !== "carried_over").length;
+  const overallCompletionRate = totalNonCarried > 0 ? Math.round((completedGoals / totalNonCarried) * 100) : 0;
+
+  // Top performers (by completion rate, min 3 goals)
+  const userStats: Record<string, { total: number; completed: number }> = {};
+  for (const goal of allGoals) {
+    if (goal.status === "carried_over") continue;
+    if (!userStats[goal.userId]) {
+      userStats[goal.userId] = { total: 0, completed: 0 };
+    }
+    userStats[goal.userId].total++;
+    if (goal.status === "completed") {
+      userStats[goal.userId].completed++;
+    }
+  }
+
+  const topPerformers = Object.entries(userStats)
+    .filter(([_, stats]) => stats.total >= 3)
+    .map(([userId, stats]) => ({
+      userId,
+      completedGoals: stats.completed,
+      completionRate: Math.round((stats.completed / stats.total) * 100),
+    }))
+    .sort((a, b) => b.completionRate - a.completionRate)
+    .slice(0, 5);
+
+  // Recent activity
+  const goalsSetLast7Days = allGoals.filter((g) => new Date(g.createdAt) >= sevenDaysAgo).length;
+  const goalsCompletedLast7Days = allGoals.filter(
+    (g) => g.completedAt && new Date(g.completedAt) >= sevenDaysAgo
+  ).length;
+
+  return {
+    totalUsers: uniqueUsers.length,
+    totalGoals: allGoals.length,
+    activeGoals,
+    completedGoals,
+    carriedOverGoals,
+    overallCompletionRate,
+    currentSprintNumber: currentSprint,
+    currentSprintStats: {
+      goals: currentSprintGoals.length,
+      completed: currentSprintCompleted,
+      activeUsers: currentSprintUsers.length,
+    },
+    topPerformers,
+    recentActivity: {
+      goalsSetLast7Days,
+      goalsCompletedLast7Days,
+    },
+  };
+};
+
+// Get DB summary for LLM context (used by admin chat)
+export const getDBSummaryForLLM = async (): Promise<string> => {
+  const stats = await getAdminStats();
+  const currentSprint = getCurrentSprintNumber();
+
+  // Get recent goals with more detail for context
+  const recentGoals = await db.goal.findMany({
+    where: { sprintNum: { gte: currentSprint - 2 } },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+
+  const goalsByStatus = {
+    active: recentGoals.filter((g) => g.status === "active"),
+    completed: recentGoals.filter((g) => g.status === "completed"),
+    carriedOver: recentGoals.filter((g) => g.status === "carried_over"),
+  };
+
+  return `
+DATABASE SUMMARY (KoruClub Goal Tracking):
+
+OVERALL STATS:
+- Total users: ${stats.totalUsers}
+- Total goals ever set: ${stats.totalGoals}
+- Goals completed: ${stats.completedGoals} (${stats.overallCompletionRate}% completion rate)
+- Currently active goals: ${stats.activeGoals}
+- Carried over (incomplete): ${stats.carriedOverGoals}
+
+CURRENT SPRINT (#${stats.currentSprintNumber}):
+- Goals set: ${stats.currentSprintStats.goals}
+- Completed: ${stats.currentSprintStats.completed}
+- Active users: ${stats.currentSprintStats.activeUsers}
+
+RECENT ACTIVITY (Last 7 days):
+- Goals set: ${stats.recentActivity.goalsSetLast7Days}
+- Goals completed: ${stats.recentActivity.goalsCompletedLast7Days}
+
+TOP PERFORMERS:
+${stats.topPerformers.map((p, i) => `${i + 1}. User ${p.userId.slice(-6)}: ${p.completedGoals} completed (${p.completionRate}%)`).join("\n")}
+
+SAMPLE RECENT GOALS (last 3 sprints):
+Active: ${goalsByStatus.active.slice(0, 10).map((g) => `"${g.text}"`).join(", ")}
+Completed: ${goalsByStatus.completed.slice(0, 10).map((g) => `"${g.text}"`).join(", ")}
+`.trim();
 };
