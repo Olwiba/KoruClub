@@ -441,6 +441,7 @@ client.on("loading_screen", (percent: number, message: string) => {
 
 client.on("ready", async () => {
   console.log("Client is ready! KoruClub is now active.");
+  console.log(`Client info: ${client.info?.wid?.user || "not available"}`);
   isClientReady = true;
   botStartTime = new Date();
 
@@ -496,8 +497,10 @@ client.on("disconnected", (reason: string) => {
   botStatus.isActive = false;
 });
 
-// Message handler
-client.on("message", async (message: Message) => {
+// Message handler - use message_create to catch all messages including after manual ready trigger
+client.on("message_create", async (message: Message) => {
+  // Ignore messages sent by us
+  if (message.fromMe) return;
   try {
     const chat = await message.getChat();
     const content = message.body.trim();
