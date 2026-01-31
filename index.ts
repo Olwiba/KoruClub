@@ -431,14 +431,22 @@ client.on("authenticated", async () => {
   }
 
   // WORKAROUND: Known whatsapp-web.js bug where 'ready' event doesn't fire
-  // Backup timeout - if ready doesn't fire in 10s, manually trigger
-  readyBackupTimeout = setTimeout(() => {
+  // Wait longer (60s) then check if we can force initialization
+  readyBackupTimeout = setTimeout(async () => {
     if (!isClientReady) {
-      console.log("Ready event timeout - manually triggering...");
-      client.emit("ready");
+      console.log("Ready event timeout (60s) - attempting to force initialization...");
+      try {
+        // Try to get chats - this forces internal initialization
+        const chats = await client.getChats();
+        console.log(`Got ${chats.length} chats - client is functional`);
+        client.emit("ready");
+      } catch (err) {
+        console.error("Failed to force initialization:", err);
+        client.emit("ready"); // Emit anyway so the bot starts
+      }
     }
     readyBackupTimeout = null;
-  }, 10000);
+  }, 60000);
 });
 
 client.on("auth_failure", (msg: string) => {
@@ -450,7 +458,12 @@ client.on("remote_session_saved", () => {
 });
 
 client.on("loading_screen", (percent: number, message: string) => {
-  console.log(`Loading WhatsApp Web: ${percent}% - ${message}`);
+  console.log(`[Loading] ${percent}% - ${message}`);
+});
+
+// Log when WhatsApp state changes
+client.on("change_state", (state: string) => {
+  console.log(`[State] ${state}`);
 });
 
 client.on("ready", async () => {
