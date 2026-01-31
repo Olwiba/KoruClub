@@ -174,12 +174,6 @@ const isLastDayOfMonth = (date: Date): boolean => {
   return nextDay.getDate() === 1;
 };
 
-const getWeekOfMonth = (date: Date): number => {
-  const firstDayOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
-  const dayOfWeek = firstDayOfMonth.getDay();
-  return Math.ceil((date.getDate() + dayOfWeek) / 7);
-};
-
 const getISOWeekNumber = (date: Date): number => {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -412,22 +406,8 @@ client.on("qr", (qr: string) => {
   qrcode.generate(qr, { small: true });
 });
 
-// Debug: Catch ALL events to see what's happening
-const originalEmit = client.emit.bind(client);
-client.emit = function(event: string, ...args: any[]) {
-  if (!["change_state"].includes(event)) { // Filter out noisy events
-    console.log(`[Event] ${event}`);
-  }
-  return originalEmit(event, ...args);
-};
-
-// Debug: Log all incoming messages at the raw level
-client.on("message", (msg: Message) => {
-  console.log(`[Raw message event] from=${msg.from}, body=${msg.body?.substring(0, 30)}`);
-});
-
 client.on("authenticated", () => {
-  console.log("Authentication successful!");
+  console.log("Authenticated");
 });
 
 client.on("auth_failure", (msg: string) => {
@@ -438,25 +418,10 @@ client.on("remote_session_saved", () => {
   console.log("✅ WhatsApp session saved to database");
 });
 
-client.on("loading_screen", (percent: number, message: string) => {
-  console.log(`[Loading] ${percent}% - ${message}`);
-});
-
-// Log when WhatsApp state changes
-client.on("change_state", (state: string) => {
-  console.log(`[State] ${state}`);
-});
-
 client.on("ready", async () => {
-  console.log("Client is ready! KoruClub is now active.");
-  console.log(`Client info: ${client.info?.wid?.user || "not available"}`);
+  console.log("Client ready");
   isClientReady = true;
   botStartTime = new Date();
-
-  // Debug: Check if message listeners are properly set up
-  const listenerCount = client.listenerCount("message");
-  const createListenerCount = client.listenerCount("message_create");
-  console.log(`[Debug] Message listeners: message=${listenerCount}, message_create=${createListenerCount}`);
 
   // Send admin notification if configured - with retry
   const adminChatId = process.env.ADMIN_CHAT_ID;
@@ -497,38 +462,25 @@ client.on("disconnected", (reason: string) => {
   botStatus.isActive = false;
 });
 
-// Message handler - use message_create to catch all messages including after manual ready trigger
 client.on("message_create", async (message: Message) => {
-  console.log(`[Message Event] Received: fromMe=${message.fromMe}, from=${message.from}, body=${message.body?.substring(0, 50)}`);
-  
-  // Ignore messages sent by us
   if (message.fromMe) return;
+  
   try {
     const chat = await message.getChat();
     const content = message.body.trim();
     const isGroupMessage = message.from.endsWith("@g.us");
     const isDirectMessage = !isGroupMessage;
-
-    const timestamp = new Date().toISOString();
     const adminChatId = process.env.ADMIN_CHAT_ID;
     const targetGroupId = process.env.TARGET_GROUP_ID;
 
-    if (isGroupMessage) {
-      console.log(`[${timestamp}] Received group message from ${chat.name}: ${content}`);
-    } else {
-      console.log(`[${timestamp}] Received direct message from ${message.from}: ${content}`);
-    }
-
     // Only respond to DMs from admin
     if (isDirectMessage && adminChatId && message.from !== adminChatId) {
-      console.log(`[${timestamp}] Ignoring DM from non-admin: ${message.from}`);
       return;
     }
 
     if (isGroupMessage) {
       // If TARGET_GROUP_ID is set in env, only respond to that group
       if (targetGroupId && message.from !== targetGroupId) {
-        console.log(`[${timestamp}] Ignoring message from non-target group: ${message.from}`);
         return;
       }
 
@@ -563,7 +515,6 @@ client.on("message_create", async (message: Message) => {
           botStatus.scheduledTasksCount = 0;
           botStatus.nextScheduledTasks = [];
           await chat.sendMessage("🛑 Scheduled message service stopped.");
-          console.log(`[${new Date().toISOString()}] Scheduled message service stopped by user command`);
         }
       } else if (content === BOT_CONFIG.STATUS_COMMAND) {
         const status =
@@ -593,25 +544,20 @@ client.on("message_create", async (message: Message) => {
           `🧭 *${BOT_CONFIG.MENTOR_COMMAND}* - Get AI mentorship on your goals`;
         await chat.sendMessage(helpText);
       } else if (content === BOT_CONFIG.MONDAY_COMMAND) {
-        console.log(`Manually triggering Sprint Kickoff at ${formatDate(new Date())}`);
         const kickoffMsg = await chat.sendMessage(
           "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
         );
         lastKickoffMessageId = kickoffMsg.id._serialized;
         lastKickoffTime = new Date();
-        console.log(`Tracking manual kickoff, window open for ${KICKOFF_WINDOW_HOURS}hrs`);
       } else if (content === BOT_CONFIG.FRIDAY_COMMAND) {
-        console.log(`Manually triggering Sprint Review at ${formatDate(new Date())}`);
         await chat.sendMessage(
           "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉"
         );
       } else if (content === BOT_CONFIG.DEMO_COMMAND) {
-        console.log(`Manually triggering Demo Day at ${formatDate(new Date())}`);
         await chat.sendMessage(
           "*Demo day*\n\n👉 Share what you've been cooking up!\n\nThere is no specific format. Could be a short vid, link, screenshot or picture. 🏆"
         );
       } else if (content === BOT_CONFIG.MONTHLY_COMMAND) {
-        console.log(`Manually triggering Monthly Celebration at ${formatDate(new Date())}`);
         await chat.sendMessage(
           "*Monthly Celebration* 🎊\n\nAs we close out the month, take a moment to reflect on your accomplishments!\n\nBe proud of what you've achieved ✨"
         );
@@ -691,12 +637,10 @@ client.on("message_create", async (message: Message) => {
 
           // Only auto-extract (non-reply) if user doesn't have goals yet
           if (isReplyToKickoff || !hasRecentGoals) {
-            console.log(`[Goal Extraction] Processing goals from ${userId} (reply: ${isReplyToKickoff}, window: ${isWithinKickoffWindow})`);
             const extractedGoals = await extractGoals(content);
 
             if (extractedGoals.length > 0) {
-              const newGoals = await addGoals(userId, extractedGoals);
-              console.log(`[Goal Extraction] Captured ${newGoals.length} goals for ${userId}`);
+              await addGoals(userId, extractedGoals);
 
               const response = await generateResponse("goal_captured", { goals: extractedGoals });
               const goalsList = extractedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
@@ -717,7 +661,6 @@ client.on("message_create", async (message: Message) => {
           const activeGoals = await getActiveGoals(userId);
 
           if (activeGoals.length > 0) {
-            console.log(`[Completion Check] Checking message from ${userId} against ${activeGoals.length} goals`);
             const matches = await matchCompletions(content, activeGoals);
 
             const completedGoals: string[] = [];
@@ -755,7 +698,6 @@ client.on("message_create", async (message: Message) => {
               : "No upcoming messages scheduled."
           }`;
         await chat.sendMessage(status);
-        console.log(`[${new Date().toISOString()}] Sent status report via direct message`);
       } else if (content === BOT_CONFIG.HELP_COMMAND) {
         const helpText =
           `*Admin Commands (Direct Message)*\n\n` +
@@ -768,15 +710,6 @@ client.on("message_create", async (message: Message) => {
   } catch (error) {
     console.error("Error handling message:", error);
   }
-});
-
-// Error handling
-process.on("uncaughtException", (err) => {
-  console.error("Uncaught Exception:", err);
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason);
 });
 
 // Main startup
