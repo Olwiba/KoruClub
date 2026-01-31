@@ -219,7 +219,7 @@ const retryScheduledTask = async (
       console.log(`${taskName}: Attempt ${attempt}/${maxRetries}`);
       const groupChat = await safelyGetChat(BOT_CONFIG.TARGET_GROUP_ID);
       if (!groupChat) throw new Error("Unable to get target group chat");
-      const sentMessage = await groupChat.sendMessage(messageText);
+      const sentMessage = await groupChat.sendMessage(messageText, { sendSeen: false });
       console.log(`${taskName}: Message sent successfully on attempt ${attempt}`);
       return sentMessage;
     } catch (error) {
@@ -488,7 +488,7 @@ client.on("ready", async () => {
   if (adminChatId) {
     const sendAdminNotification = async (attempt = 1) => {
       try {
-        await client.sendMessage(adminChatId, "✅ *Bot Online*\n\nKoruClub is now connected and ready.");
+        await client.sendMessage(adminChatId, "✅ *Bot Online*\n\nKoruClub is now connected and ready.", { sendSeen: false });
         console.log("Sent online notification to admin");
       } catch (err) {
         console.error(`Failed to send admin notification (attempt ${attempt}):`, err);
