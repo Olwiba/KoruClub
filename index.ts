@@ -486,7 +486,7 @@ const startSessionBackup = () => {
 
       console.log(`[Session Backup] Creating backup (${sessionContents.length} items)...`);
 
-      // Create zip manually using archiver, excluding lockfiles
+      // Create zip manually using archiver, excluding lockfiles and cache dirs
       const archiver = require("archiver");
       const output = fs.createWriteStream(zipPath);
       const archive = archiver("zip", { zlib: { level: 9 } });
@@ -498,10 +498,29 @@ const startSessionBackup = () => {
         });
         archive.on("error", reject);
         archive.pipe(output);
-        // Exclude lockfiles that cause "browser already running" errors on restore
+        // Exclude lockfiles and cache directories to reduce size (~27MB -> ~5MB)
         archive.glob("**/*", {
           cwd: sessionDir,
-          ignore: ["lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"],
+          ignore: [
+            // Lockfiles that cause "browser already running" errors
+            "lockfile",
+            "SingletonLock",
+            "SingletonSocket",
+            "SingletonCookie",
+            // Cache directories (not needed for session restore)
+            "**/Cache/**",
+            "**/Code Cache/**",
+            "**/GPUCache/**",
+            "**/GrShaderCache/**",
+            "**/ShaderCache/**",
+            "**/Service Worker/**",
+            "**/ScriptCache/**",
+            "**/DawnCache/**",
+            // Other unnecessary files
+            "**/*.log",
+            "**/Crashpad/**",
+            "**/BrowserMetrics/**",
+          ],
         });
         archive.finalize();
       });
