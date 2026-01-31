@@ -404,6 +404,11 @@ client.on("qr", (qr: string) => {
   qrcode.generate(qr, { small: true });
 });
 
+// Debug: Log all incoming messages at the raw level
+client.on("message", (msg: Message) => {
+  console.log(`[Raw message event] from=${msg.from}, body=${msg.body?.substring(0, 30)}`);
+});
+
 // Track backup timeout for ready event workaround
 let readyBackupTimeout: NodeJS.Timeout | null = null;
 
@@ -499,6 +504,8 @@ client.on("disconnected", (reason: string) => {
 
 // Message handler - use message_create to catch all messages including after manual ready trigger
 client.on("message_create", async (message: Message) => {
+  console.log(`[Message Event] Received: fromMe=${message.fromMe}, from=${message.from}, body=${message.body?.substring(0, 50)}`);
+  
   // Ignore messages sent by us
   if (message.fromMe) return;
   try {
