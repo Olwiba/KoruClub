@@ -124,7 +124,7 @@ const store = isProduction ? new PrismaStore() : null;
 const authStrategy = isProduction
   ? new RemoteAuth({
       store,
-      backupSyncIntervalMs: 60000, // 1 minute (faster initial save)
+      backupSyncIntervalMs: 60000, // 1 minute
       clientId: "koruclub",
       dataPath: "./.wwebjs_auth",
     })
@@ -910,44 +910,10 @@ async function main() {
     }
   }
 
-  // Initialize WhatsApp client with failsafe for disk full errors
-  const initializeWithFailsafe = async () => {
-    try {
-      await client.initialize();
-    } catch (err: any) {
-      console.error("Client initialization failed:", err);
-
-      // If disk full (ENOSPC), purge and retry with fresh auth
-      if (err?.code === "ENOSPC" || err?.message?.includes("ENOSPC") || err?.message?.includes("no space left")) {
-        console.log("⚠️ Disk full detected - purging session and retrying with fresh auth...");
-
-        try {
-          // Clear local auth directory
-          const authDir = "./.wwebjs_auth";
-          if (fs.existsSync(authDir)) {
-            fs.rmSync(authDir, { recursive: true, force: true });
-            console.log("Cleared local auth directory");
-          }
-
-          // Delete session from database
-          if (isProduction) {
-            await db.whatsappSession.deleteMany({
-              where: { sessionId: "RemoteAuth-koruclub" },
-            });
-            console.log("Deleted session from database");
-          }
-
-          // Retry initialization (will show QR code)
-          console.log("Retrying initialization - scan QR code when prompted...");
-          await client.initialize();
-        } catch (retryErr) {
-          console.error("Retry also failed:", retryErr);
-        }
-      }
-    }
-  };
-
-  initializeWithFailsafe();
+  // Initialize WhatsApp client
+  client.initialize().catch((err: Error) => {
+    console.error("Client initialization failed:", err);
+  });
 }
 
 main().catch((err) => {
