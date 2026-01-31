@@ -430,23 +430,21 @@ client.on("authenticated", async () => {
     readyBackupTimeout = null;
   }
 
-  // WORKAROUND: Known whatsapp-web.js bug where 'ready' event doesn't fire
-  // Wait longer (60s) then check if we can force initialization
+  // Backup timeout in case ready doesn't fire (should be fixed in fork)
   readyBackupTimeout = setTimeout(async () => {
     if (!isClientReady) {
-      console.log("Ready event timeout (60s) - attempting to force initialization...");
+      console.log("Ready event timeout (30s) - attempting to force initialization...");
       try {
-        // Try to get chats - this forces internal initialization
         const chats = await client.getChats();
-        console.log(`Got ${chats.length} chats - client is functional`);
+        console.log(`Got ${chats.length} chats - forcing ready`);
         client.emit("ready");
       } catch (err) {
         console.error("Failed to force initialization:", err);
-        client.emit("ready"); // Emit anyway so the bot starts
+        client.emit("ready");
       }
     }
     readyBackupTimeout = null;
-  }, 60000);
+  }, 30000);
 });
 
 client.on("auth_failure", (msg: string) => {
