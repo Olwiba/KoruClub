@@ -107,6 +107,14 @@ const authStrategy = isProduction
 
 console.log(`Using ${isProduction ? "RemoteAuth (PostgreSQL)" : "LocalAuth (local files)"}`);
 
+// Log whatsapp-web.js version for debugging
+try {
+  const wwjsPackage = require("whatsapp-web.js/package.json");
+  console.log(`whatsapp-web.js version: ${wwjsPackage.version}`);
+} catch (e) {
+  console.log("Could not determine whatsapp-web.js version");
+}
+
 // Create WhatsApp client
 const client = new Client({
   authStrategy,
@@ -469,6 +477,11 @@ client.on("ready", async () => {
   console.log(`Client info: ${client.info?.wid?.user || "not available"}`);
   isClientReady = true;
   botStartTime = new Date();
+
+  // Debug: Check if message listeners are properly set up
+  const listenerCount = client.listenerCount("message");
+  const createListenerCount = client.listenerCount("message_create");
+  console.log(`[Debug] Message listeners: message=${listenerCount}, message_create=${createListenerCount}`);
 
   // Clear backup timeout since ready fired naturally
   if (readyBackupTimeout) {
