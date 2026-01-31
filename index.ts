@@ -44,30 +44,14 @@ const healthServer = createServer((req, res) => {
 });
 healthServer.listen(3000, () => console.log("Health server on :3000"));
 
-// Patch RemoteAuth to fix mkdir issue in production and clean lockfiles after extract
+// Patch RemoteAuth to clean lockfiles after session extraction
 if (isProduction) {
   try {
     const RemoteAuthPath = require.resolve("whatsapp-web.js/src/authStrategies/RemoteAuth");
     const RemoteAuthModule = require(RemoteAuthPath);
     const unzipper = require("unzipper");
-    const path = require("path");
-
-    // Patch: Ensure deleteMetadata runs before compression (reduces session size by 50-80%)
-    const originalCompressSession = RemoteAuthModule.prototype.compressSession;
-    RemoteAuthModule.prototype.compressSession = async function () {
-      console.log("[RemoteAuth] Running metadata cleanup before compression...");
-      try {
-        // deleteMetadata removes cache, logs, and temp files - keeps only Default, IndexedDB, Local Storage
-        await this.deleteMetadata();
-        console.log("[RemoteAuth] Metadata cleanup complete");
-      } catch (err) {
-        console.warn("[RemoteAuth] Metadata cleanup failed (continuing anyway):", err);
-      }
-      return originalCompressSession.call(this);
-    };
 
     RemoteAuthModule.prototype.unCompressSession = async function (compressedSessionPath: string) {
-      // Match official lib pattern
       const stream = fs.createReadStream(compressedSessionPath);
       await new Promise((resolve, reject) => {
         stream
@@ -85,9 +69,9 @@ if (isProduction) {
           fs.unlinkSync(lockPath);
         }
       }
-      console.log(`[RemoteAuth] Session extracted and cleaned up`);
+      console.log("[RemoteAuth] Session restored");
     };
-    console.log("RemoteAuth patches applied (metadata cleanup + lockfile removal)");
+    console.log("RemoteAuth patch applied (lockfile cleanup)");
   } catch (err) {
     console.error("Failed to patch RemoteAuth:", err);
   }
