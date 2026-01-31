@@ -67,34 +67,25 @@ if (isProduction) {
     };
 
     RemoteAuthModule.prototype.unCompressSession = async function (compressedSessionPath: string) {
+      // Match official lib pattern
       const stream = fs.createReadStream(compressedSessionPath);
-
-      if (!fs.existsSync(this.userDataDir)) {
-        fs.mkdirSync(this.userDataDir, { recursive: true });
-      }
-
       await new Promise((resolve, reject) => {
         stream
           .pipe(unzipper.Extract({ path: this.userDataDir }))
           .on("error", (err: Error) => reject(err))
           .on("finish", () => resolve(true));
       });
+      await fs.promises.unlink(compressedSessionPath);
 
-      // Clean up lockfiles that cause "browser already running" errors
+      // Clean lockfiles that cause "browser already running" errors
       const lockFiles = ["lockfile", "SingletonLock", "SingletonSocket", "SingletonCookie"];
       for (const lock of lockFiles) {
         const lockPath = `${this.userDataDir}/${lock}`;
         if (fs.existsSync(lockPath)) {
-          console.log(`[RemoteAuth] Removing ${lock} from restored session`);
           fs.unlinkSync(lockPath);
         }
       }
-
-      // Always clean up the zip file to save disk space
-      if (fs.existsSync(compressedSessionPath)) {
-        await fs.promises.unlink(compressedSessionPath);
-        console.log(`[RemoteAuth] Cleaned up zip file`);
-      }
+      console.log(`[RemoteAuth] Session extracted and cleaned up`);
     };
     console.log("RemoteAuth patches applied (metadata cleanup + lockfile removal)");
   } catch (err) {
@@ -460,93 +451,6 @@ client.on("remote_session_saved", () => {
   console.log("✅ WhatsApp session saved to database");
 });
 
-// Manual session backup function (called after auth)
-let backupIntervalId: NodeJS.Timeout | null = null;
-
-const startSessionBackup = () => {
-  if (!isProduction || !store || backupIntervalId) return;
-
-  const sessionBackup = async () => {
-    try {
-      const authDir = "./.wwebjs_auth";
-      const sessionDir = `${authDir}/RemoteAuth-koruclub`;
-      const zipPath = `${authDir}/RemoteAuth-koruclub.zip`;
-
-      // Check if session folder exists and has data
-      if (!fs.existsSync(sessionDir)) {
-        console.log(`[Session Backup] Session dir not found yet`);
-        return;
-      }
-
-      const sessionContents = fs.readdirSync(sessionDir);
-      if (sessionContents.length === 0) {
-        console.log(`[Session Backup] Session dir is empty`);
-        return;
-      }
-
-      console.log(`[Session Backup] Creating backup (${sessionContents.length} items)...`);
-
-      // Create zip manually using archiver, excluding lockfiles and cache dirs
-      const archiver = require("archiver");
-      const output = fs.createWriteStream(zipPath);
-      const archive = archiver("zip", { zlib: { level: 9 } });
-
-      await new Promise<void>((resolve, reject) => {
-        output.on("close", () => {
-          console.log(`[Session Backup] Zip created: ${archive.pointer()} bytes`);
-          resolve();
-        });
-        archive.on("error", reject);
-        archive.pipe(output);
-        // Exclude lockfiles and cache directories to reduce size (~27MB -> ~5MB)
-        archive.glob("**/*", {
-          cwd: sessionDir,
-          ignore: [
-            // Lockfiles that cause "browser already running" errors
-            "lockfile",
-            "SingletonLock",
-            "SingletonSocket",
-            "SingletonCookie",
-            // Cache directories (not needed for session restore)
-            "**/Cache/**",
-            "**/Code Cache/**",
-            "**/GPUCache/**",
-            "**/GrShaderCache/**",
-            "**/ShaderCache/**",
-            "**/Service Worker/**",
-            "**/ScriptCache/**",
-            "**/DawnCache/**",
-            // Other unnecessary files
-            "**/*.log",
-            "**/Crashpad/**",
-            "**/BrowserMetrics/**",
-          ],
-        });
-        archive.finalize();
-      });
-
-      // Now save to database
-      await store.save({ session: "RemoteAuth-koruclub" });
-      console.log(`[Session Backup] ✅ Session saved to database`);
-
-      // Clean up zip file to save disk space
-      if (fs.existsSync(zipPath)) {
-        fs.unlinkSync(zipPath);
-        console.log(`[Session Backup] Cleaned up local zip file`);
-      }
-    } catch (error) {
-      console.error(`[Session Backup] Error:`, error);
-    }
-  };
-
-  // Initial backup after 10 seconds, then every 2 minutes
-  console.log("[Session Backup] Scheduling backups (first in 10s, then every 2min)");
-  setTimeout(() => {
-    sessionBackup();
-    backupIntervalId = setInterval(sessionBackup, 120000);
-  }, 10000);
-};
-
 client.on("loading_screen", (percent: number, message: string) => {
   console.log(`Loading WhatsApp Web: ${percent}% - ${message}`);
 });
@@ -562,8 +466,12 @@ client.on("ready", async () => {
     readyBackupTimeout = null;
   }
 
-  // Start session backup scheduling (only after successful auth/ready)
-  startSessionBackup();
+  // Trigger RemoteAuth's backup scheduling (normally called by 'ready' event internally,
+  // but since we manually trigger ready due to whatsapp-web.js bug, we need to call it ourselves)
+  if (isProduction && client.authStrategy?.afterAuthReady) {
+    console.log("[RemoteAuth] Starting official backup scheduler...");
+    client.authStrategy.afterAuthReady();
+  }
 
   // Send admin notification if configured - with retry
   const adminChatId = process.env.ADMIN_CHAT_ID;
