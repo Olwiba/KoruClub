@@ -3,7 +3,15 @@ import type { GroupChat } from "whatsapp-web.js";
 const { scheduleJob, RecurrenceRule } = require("node-schedule");
 
 import { BOT_CONFIG } from "./config";
-import { formatDate, isSprintWeek, isSecondSaturday, isLastDayOfMonth, getISOWeekNumber, getNZDate } from "./utils";
+import {
+  formatDate,
+  isFirstOrThirdMonday,
+  isSecondOrFourthFriday,
+  isSecondOrFourthWednesday,
+  isSecondSaturday,
+  isLastDayOfMonth,
+  getNZDate,
+} from "./utils";
 import { retryScheduledTask } from "./client";
 import { getUsersWithActiveGoals } from "./goalStore";
 import {
@@ -39,11 +47,11 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     scheduledJobs.monday = scheduleJob("Monday 9am", mondayRule, async () => {
       try {
         const now = getNZDate();
-        if (!isSprintWeek(now)) {
-          console.log(`Skipping Monday task - not a sprint week (week ${getISOWeekNumber(now)})`);
+        if (!isFirstOrThirdMonday(now)) {
+          console.log(`Skipping Monday task - not 1st or 3rd Monday (day ${now.getDate()})`);
           return;
         }
-        console.log(`Executing Sprint Kickoff at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
+        console.log(`Executing Sprint Kickoff at ${formatDate(now)} (day ${now.getDate()})`);
         const kickoffMsg = await retryScheduledTask(
           "Sprint Kickoff",
           "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪",
@@ -69,11 +77,11 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     scheduledJobs.friday = scheduleJob("Friday 3:30pm", fridayRule, async () => {
       try {
         const now = getNZDate();
-        if (isSprintWeek(now)) {
-          console.log(`Skipping Friday task - not a review week (week ${getISOWeekNumber(now)})`);
+        if (!isSecondOrFourthFriday(now)) {
+          console.log(`Skipping Friday task - not 2nd or 4th Friday (day ${now.getDate()})`);
           return;
         }
-        console.log(`Executing Sprint Review at ${formatDate(now)} (week ${getISOWeekNumber(now)})`);
+        console.log(`Executing Sprint Review at ${formatDate(now)} (day ${now.getDate()})`);
         await retryScheduledTask(
           "Sprint Review",
           "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉",
@@ -121,11 +129,11 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     scheduledJobs.checkIn = scheduleJob("Mid-sprint Check-in", checkInRule, async () => {
       try {
         const now = getNZDate();
-        if (isSprintWeek(now)) {
-          console.log(`Skipping check-in - not mid-sprint (week ${getISOWeekNumber(now)})`);
+        if (!isSecondOrFourthWednesday(now)) {
+          console.log(`Skipping check-in - not 2nd or 4th Wednesday (day ${now.getDate()})`);
           return;
         }
-        console.log(`Executing Mid-sprint Check-in at ${formatDate(now)}`);
+        console.log(`Executing Mid-sprint Check-in at ${formatDate(now)} (day ${now.getDate()})`);
         const usersWithGoals = await getUsersWithActiveGoals();
         const msg =
           usersWithGoals.length === 0

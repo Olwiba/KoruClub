@@ -14,6 +14,8 @@ export const BOT_CONFIG = {
   MENTOR_COMMAND: "!bot mentor",
   STATS_COMMAND: "!bot stats",
   CHAT_COMMAND: "!bot chat",
+  USERS_COMMAND: "!bot users",
+  INGEST_COMMAND: "!bot ingest",
   TARGET_GROUP_ID: "",
 };
 

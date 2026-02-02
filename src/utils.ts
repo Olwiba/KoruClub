@@ -26,6 +26,30 @@ export const isSprintWeek = (date: Date): boolean => {
   return getISOWeekNumber(date) % 2 === 1;
 };
 
+// Check if date is the 1st or 3rd Monday of the month (sprint kickoff days)
+export const isFirstOrThirdMonday = (date: Date): boolean => {
+  if (date.getDay() !== 1) return false; // Not Monday
+  const dayOfMonth = date.getDate();
+  // 1st Monday: day 1-7, 3rd Monday: day 15-21
+  return (dayOfMonth >= 1 && dayOfMonth <= 7) || (dayOfMonth >= 15 && dayOfMonth <= 21);
+};
+
+// Check if date is the 2nd or 4th Friday of the month (sprint review days)
+export const isSecondOrFourthFriday = (date: Date): boolean => {
+  if (date.getDay() !== 5) return false; // Not Friday
+  const dayOfMonth = date.getDate();
+  // 2nd Friday: day 8-14, 4th Friday: day 22-28
+  return (dayOfMonth >= 8 && dayOfMonth <= 14) || (dayOfMonth >= 22 && dayOfMonth <= 28);
+};
+
+// Check if date is the 2nd or 4th Wednesday of the month (mid-sprint check-in days)
+export const isSecondOrFourthWednesday = (date: Date): boolean => {
+  if (date.getDay() !== 3) return false; // Not Wednesday
+  const dayOfMonth = date.getDate();
+  // 2nd Wednesday: day 8-14, 4th Wednesday: day 22-28
+  return (dayOfMonth >= 8 && dayOfMonth <= 14) || (dayOfMonth >= 22 && dayOfMonth <= 28);
+};
+
 export const isSecondSaturday = (date: Date): boolean => {
   if (date.getDay() !== 6) return false; // Not Saturday
   const dayOfMonth = date.getDate();

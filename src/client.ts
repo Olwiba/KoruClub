@@ -128,6 +128,9 @@ export const retryScheduledTask = async (
   return null;
 };
 
+// Get the client instance
+export const getClient = () => client;
+
 // Clean stale lockfiles from previous runs
 export const cleanStaleLockfiles = () => {
   const sessionDir = "./.wwebjs_auth/RemoteAuth-koruclub";

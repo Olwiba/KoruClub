@@ -1,9 +1,7 @@
 // KoruClub WhatsApp Bot - Main Entry Point
-import fs from "fs";
 const qrcode = require("qrcode-terminal");
 
 import { db } from "./db";
-import { adminChatId } from "./config";
 import { startHealthServer, setClientReady } from "./health";
 import { client, cleanStaleLockfiles } from "./client";
 import { setBotStartTime, setSchedulerActive, botStatus } from "./state";
@@ -49,6 +47,7 @@ client.on("ready", async () => {
   setBotStartTime(new Date());
 
   // Send admin notification if configured - with retry
+  const adminChatId = process.env.ADMIN_CHAT_ID;
   if (adminChatId) {
     const sendAdminNotification = async (attempt = 1) => {
       try {
@@ -66,6 +65,8 @@ client.on("ready", async () => {
     };
     // Wait 15s for WhatsApp to fully stabilize before first attempt
     setTimeout(() => sendAdminNotification(), 15000);
+  } else {
+    console.log("No ADMIN_CHAT_ID configured, skipping admin notification");
   }
 
   // Initialize goal tracking

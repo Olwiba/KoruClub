@@ -16,7 +16,7 @@ import {
   handleMentorCommand,
 } from "./commands";
 import { handleGoalMessage } from "./goals";
-import { handleStatsCommand, handleChatCommand } from "./admin";
+import { handleStatsCommand, handleChatCommand, handleUsersCommand, handleIngestCommand } from "./admin";
 
 export const handleMessage = async (message: Message) => {
   if (message.fromMe) return;
@@ -26,6 +26,11 @@ export const handleMessage = async (message: Message) => {
     const content = message.body.trim();
     const isGroupMessage = message.from.endsWith("@g.us");
     const isDirectMessage = !isGroupMessage;
+
+    // Debug: log incoming DM chat IDs
+    if (isDirectMessage) {
+      console.log(`[DEBUG] DM from: ${message.from}`);
+    }
 
     // Only respond to DMs from admin
     if (isDirectMessage && adminChatId && message.from !== adminChatId) {
@@ -79,6 +84,10 @@ export const handleMessage = async (message: Message) => {
         await handleHelpCommand(chat, true);
       } else if (content === BOT_CONFIG.STATS_COMMAND) {
         await handleStatsCommand(chat);
+      } else if (content === BOT_CONFIG.USERS_COMMAND) {
+        await handleUsersCommand(chat);
+      } else if (content.startsWith(BOT_CONFIG.INGEST_COMMAND)) {
+        await handleIngestCommand(chat, content);
       } else if (content.startsWith(BOT_CONFIG.CHAT_COMMAND)) {
         await handleChatCommand(chat, content);
       }

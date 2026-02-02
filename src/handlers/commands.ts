@@ -51,6 +51,8 @@ export const handleHelpCommand = async (chat: Chat, isAdmin: boolean = false) =>
       `📊 *${BOT_CONFIG.STATUS_COMMAND}* - Show bot status\n` +
       `📈 *${BOT_CONFIG.STATS_COMMAND}* - View goal tracking stats\n` +
       `💬 *${BOT_CONFIG.CHAT_COMMAND} <message>* - Chat with AI about the data\n` +
+      `👥 *${BOT_CONFIG.USERS_COMMAND}* - List group members with IDs\n` +
+      `📥 *${BOT_CONFIG.INGEST_COMMAND} <userId>* - Manually ingest goals\n` +
       `🛟 *${BOT_CONFIG.HELP_COMMAND}* - Show this help\n\n` +
       `*Note:* Start/stop commands must be used in the target group chat.`;
     await chat.sendMessage(helpText);
