@@ -78,8 +78,8 @@ client.on("ready", async () => {
         }
       }
     };
-    // Wait 15s for WhatsApp to fully stabilize before first attempt
-    setTimeout(() => sendAdminNotification(), 15000);
+    // Wait 30s for WhatsApp to fully stabilize before first attempt
+    setTimeout(() => sendAdminNotification(), 30000);
   } else {
     console.log("[Admin] No ADMIN_CHAT_ID configured, skipping notification");
   }
