@@ -30,11 +30,36 @@ export const initLLM = async (): Promise<boolean> => {
   }
 };
 
+// Fallback regex-based goal extraction when LLM fails
+const extractGoalsFallback = (message: string): string[] => {
+  const goals: string[] = [];
+  const lines = message.split("\n");
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    
+    // Match lines starting with emoji, bullet, number, or dash
+    const goalMatch = trimmed.match(/^(?:[\u{1F300}-\u{1F9FF}]|[-•*]|\d+[.):]?)\s*(.+)/u);
+    if (goalMatch && goalMatch[1]) {
+      const goalText = goalMatch[1].trim();
+      if (goalText.length > 3 && goalText.length < 200) {
+        goals.push(goalText);
+      }
+    }
+  }
+  
+  return goals;
+};
+
 // Extract goals from a user's message
 export const extractGoals = async (message: string): Promise<string[]> => {
+  // Try fallback first if message has clear goal markers
+  const fallbackGoals = extractGoalsFallback(message);
+  
   if (!modelReady) {
-    console.warn("LLM not ready, skipping goal extraction");
-    return [];
+    console.warn("LLM not ready, using fallback goal extraction");
+    return fallbackGoals;
   }
 
   try {
@@ -63,15 +88,23 @@ Return ONLY the JSON array:`,
     if (match) {
       const goals = JSON.parse(match[0]);
       if (Array.isArray(goals)) {
-        return goals.filter((g) => typeof g === "string" && g.length > 0);
+        const validGoals = goals.filter((g) => typeof g === "string" && g.length > 0);
+        // If LLM found fewer goals than fallback, use fallback (LLM probably missed some)
+        if (validGoals.length > 0 && validGoals.length >= fallbackGoals.length) {
+          return validGoals;
+        } else if (fallbackGoals.length > 0) {
+          console.log(`[LLM] Using fallback extraction (${fallbackGoals.length} goals vs LLM's ${validGoals.length})`);
+          return fallbackGoals;
+        }
+        return validGoals;
       }
     }
 
     console.warn("Could not parse goals from LLM response:", text);
-    return [];
+    return fallbackGoals.length > 0 ? fallbackGoals : [];
   } catch (error) {
     console.error("Error extracting goals:", error);
-    return [];
+    return fallbackGoals.length > 0 ? fallbackGoals : [];
   }
 };
 
@@ -130,10 +163,36 @@ Return ONLY the JSON array:`,
   }
 };
 
+// Validate LLM response doesn't contain garbage or echoed content
+const isValidResponse = (response: string, originalMessage?: string): boolean => {
+  if (!response || response.length < 5 || response.length > 500) {
+    return false;
+  }
+  
+  // Check for common garbage patterns
+  if (response.includes("```") || response.includes("json") || response.includes("[") && response.includes("]")) {
+    return false;
+  }
+  
+  // Check if response echoes significant portion of original message
+  if (originalMessage && originalMessage.length > 20) {
+    const originalWords = originalMessage.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+    const responseWords = response.toLowerCase().split(/\s+/);
+    const matchCount = originalWords.filter(w => responseWords.includes(w)).length;
+    if (matchCount > originalWords.length * 0.3) {
+      console.warn("[LLM] Response appears to echo user message, discarding");
+      return false;
+    }
+  }
+  
+  return true;
+};
+
 // Generate a brief encouraging response
 export const generateResponse = async (
   context: "goal_captured" | "goal_completed" | "check_in",
-  data: { goals?: string[]; completedGoals?: string[]; userName?: string }
+  data: { goals?: string[]; completedGoals?: string[]; userName?: string },
+  originalMessage?: string
 ): Promise<string | null> => {
   if (!modelReady) {
     return null;
@@ -144,7 +203,7 @@ export const generateResponse = async (
 
     switch (context) {
       case "goal_captured":
-        prompt = `Generate a brief (1-2 sentences) encouraging acknowledgment for someone who just set these sprint goals: ${data.goals?.join(", ")}. Be casual and supportive. Include one relevant emoji.`;
+        prompt = `Generate a brief (1-2 sentences) encouraging acknowledgment for someone who just set these sprint goals: ${data.goals?.join(", ")}. Be casual and supportive. Include one relevant emoji. Do NOT repeat their goals back to them.`;
         break;
       case "goal_completed":
         prompt = `Generate a brief (1 sentence) celebration for completing: ${data.completedGoals?.join(", ")}. Be enthusiastic but concise. Include one relevant emoji.`;
@@ -164,7 +223,14 @@ export const generateResponse = async (
       },
     });
 
-    return response.response.trim();
+    const text = response.response.trim();
+    
+    if (!isValidResponse(text, originalMessage)) {
+      console.warn("[LLM] Invalid response, using fallback");
+      return null;
+    }
+    
+    return text;
   } catch (error) {
     console.error("Error generating response:", error);
     return null;

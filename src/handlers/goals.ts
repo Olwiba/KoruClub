@@ -36,11 +36,11 @@ export const handleGoalMessage = async (message: Message, content: string) => {
       if (extractedGoals.length > 0) {
         await addGoals(userId, extractedGoals);
 
-        const response = await generateResponse("goal_captured", { goals: extractedGoals });
+        const response = await generateResponse("goal_captured", { goals: extractedGoals }, content);
         const goalsList = extractedGoals.map((g, i) => `${i + 1}. ${g}`).join("\n");
 
         await message.reply(
-          response || `✅ Got it! I've captured your goals:\n\n${goalsList}\n\n_I'll track these for you this sprint!_`
+          response || `✅ Got it! I've captured ${extractedGoals.length} goal${extractedGoals.length > 1 ? 's' : ''}:\n\n${goalsList}\n\n_I'll track these for you this sprint!_`
         );
       }
     }
