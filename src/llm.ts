@@ -33,14 +33,17 @@ export const initLLM = async (): Promise<boolean> => {
 // Fallback regex-based goal extraction when LLM fails
 const extractGoalsFallback = (message: string): string[] => {
   const goals: string[] = [];
-  const lines = message.split("\n");
+  // Normalize special characters (zero-width spaces, etc.)
+  const normalized = message.replace(/[\u200B-\u200D\uFEFF\u2060]/g, '');
+  const lines = normalized.split("\n");
   
   for (const line of lines) {
-    const trimmed = line.trim();
+    // Remove leading/trailing whitespace and special chars
+    const trimmed = line.replace(/^[\s\u00A0\u2000-\u200A]+|[\s\u00A0\u2000-\u200A]+$/g, '');
     if (!trimmed) continue;
     
-    // Match lines starting with emoji, bullet, number, or dash
-    const goalMatch = trimmed.match(/^(?:[\u{1F300}-\u{1F9FF}]|[-•*]|\d+[.):]?)\s*(.+)/u);
+    // Match lines starting with emoji, bullet, number, dash, or asterisk
+    const goalMatch = trimmed.match(/^(?:[\u{1F300}-\u{1FAD6}]|[-–—•*►▶→]|\d+[.):\-]?)\s*(.+)/u);
     if (goalMatch && goalMatch[1]) {
       const goalText = goalMatch[1].trim();
       if (goalText.length > 3 && goalText.length < 200) {
@@ -50,6 +53,23 @@ const extractGoalsFallback = (message: string): string[] => {
   }
   
   return goals;
+};
+
+// Detect if LLM returned the prompt examples instead of actual goals
+const PROMPT_EXAMPLES = [
+  "finish the landing page",
+  "fix the auth bug",
+  "focus on testing",
+  "ship v2",
+  "write docs",
+  "review PRs",
+];
+
+const isPromptExampleResponse = (goals: string[]): boolean => {
+  const matchCount = goals.filter(g => 
+    PROMPT_EXAMPLES.some(ex => g.toLowerCase().includes(ex.toLowerCase()))
+  ).length;
+  return matchCount >= 2;
 };
 
 // Extract goals from a user's message
@@ -89,6 +109,13 @@ Return ONLY the JSON array:`,
       const goals = JSON.parse(match[0]);
       if (Array.isArray(goals)) {
         const validGoals = goals.filter((g) => typeof g === "string" && g.length > 0);
+        
+        // Check if LLM just returned the prompt examples (hallucination)
+        if (isPromptExampleResponse(validGoals)) {
+          console.warn("[LLM] Detected prompt example hallucination, using fallback");
+          return fallbackGoals.length > 0 ? fallbackGoals : [];
+        }
+        
         // If LLM found fewer goals than fallback, use fallback (LLM probably missed some)
         if (validGoals.length > 0 && validGoals.length >= fallbackGoals.length) {
           return validGoals;
