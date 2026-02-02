@@ -8,12 +8,14 @@ import { db } from "./db";
 export class PrismaStore {
   async sessionExists(options: { session: string }): Promise<boolean> {
     try {
+      console.log(`[PrismaStore] Checking if session exists: ${options.session}`);
       const count = await db.whatsappSession.count({
         where: { sessionId: options.session },
       });
+      console.log(`[PrismaStore] Session exists: ${count > 0}`);
       return count > 0;
     } catch (error) {
-      console.error("Failed to check if session exists:", error);
+      console.error("[PrismaStore] Failed to check if session exists:", error);
       return false;
     }
   }
@@ -53,6 +55,7 @@ export class PrismaStore {
   }
 
   async extract(options: { session: string; path: string }): Promise<void> {
+    console.log(`[PrismaStore] Extract called - session: ${options.session}, path: ${options.path}`);
     try {
       const session = await db.whatsappSession.findUnique({
         where: { sessionId: options.session },
@@ -60,7 +63,9 @@ export class PrismaStore {
 
       if (session && session.data) {
         const data = session.data as Buffer;
+        console.log(`[PrismaStore] Found session data: ${data.length} bytes`);
         const pathDir = options.path.substring(0, options.path.lastIndexOf("/"));
+        console.log(`[PrismaStore] Creating directory: ${pathDir}`);
         if (pathDir && !fs.existsSync(pathDir)) {
           fs.mkdirSync(pathDir, { recursive: true });
         }
@@ -68,10 +73,10 @@ export class PrismaStore {
         const sizeMB = (data.length / 1024 / 1024).toFixed(2);
         console.log(`[RemoteAuth] Session restored from database (${sizeMB}MB)`);
       } else {
-        console.warn(`Session not found in database: ${options.session}`);
+        console.warn(`[PrismaStore] Session not found in database: ${options.session}`);
       }
     } catch (error) {
-      console.error("Failed to extract session from database:", error);
+      console.error("[PrismaStore] Failed to extract session from database:", error);
       throw error;
     }
   }
