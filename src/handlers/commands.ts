@@ -2,10 +2,11 @@
 import type { Message, Chat, GroupChat } from "whatsapp-web.js";
 
 import { BOT_CONFIG } from "../config";
-import { botStatus, schedulerActive, setLastKickoff, clearScheduledJobs, setSchedulerActive } from "../state";
+import { botStatus, schedulerActive, setLastKickoff, clearScheduledJobs, setSchedulerActive, setMissedJobsCache, updateNextScheduledTasks } from "../state";
 import { setupScheduledMessages, stopScheduler } from "../scheduler";
 import { getActiveGoals, getGoalHistory, getUserStats } from "../goalStore";
 import { isLLMReady, generateMentorship } from "../llm";
+import { recordManualTrigger, getMissedJobs } from "../jobTracker";
 
 export const handleStartCommand = async (chat: Chat) => {
   if (schedulerActive) {
@@ -30,7 +31,7 @@ export const handleStopCommand = async (chat: Chat) => {
 };
 
 export const handleStatusCommand = async (chat: Chat) => {
-  const status =
+  let status =
     `*Bot Status Report*\n\n` +
     `🤖 Active: ${botStatus.isActive ? "Yes ✅" : "No ❌"}\n` +
     `⏱️ Uptime: ${botStatus.uptime()}\n` +
@@ -41,6 +42,13 @@ export const handleStatusCommand = async (chat: Chat) => {
         ? botStatus.nextScheduledTasks.map((task) => `- ${task}`).join("\n")
         : "No upcoming messages scheduled."
     }`;
+  
+  if (botStatus.missedJobsDisplay.length > 0) {
+    status += `\n\n⚠️ *Missed (needs manual trigger):*\n${
+      botStatus.missedJobsDisplay.map((job) => `- ${job}`).join("\n")
+    }`;
+  }
+  
   await chat.sendMessage(status);
 };
 
@@ -73,29 +81,51 @@ export const handleHelpCommand = async (chat: Chat, isAdmin: boolean = false) =>
   }
 };
 
+async function refreshMissedJobsCache(): Promise<void> {
+  const missedJobs = await getMissedJobs();
+  setMissedJobsCache(missedJobs);
+  updateNextScheduledTasks();
+}
+
 export const handleMondayCommand = async (chat: Chat) => {
   const kickoffMsg = await chat.sendMessage(
     "*Sprint Kickoff* 🚀\n\n👉 What are your main goals for the next 2 weeks?\n\nShare below and let's crush this sprint together! 💪"
   );
   setLastKickoff(kickoffMsg.id._serialized, new Date());
+  const resolved = await recordManualTrigger("monday", kickoffMsg.id._serialized);
+  if (resolved) {
+    await refreshMissedJobsCache();
+  }
 };
 
 export const handleFridayCommand = async (chat: Chat) => {
-  await chat.sendMessage(
+  const msg = await chat.sendMessage(
     "*Sprint Review* 🔍\n\n👉 How did you do on your sprint goals?\n\nShare your wins, learnings, and let's celebrate our growth! 🎉"
   );
+  const resolved = await recordManualTrigger("friday", msg.id._serialized);
+  if (resolved) {
+    await refreshMissedJobsCache();
+  }
 };
 
 export const handleDemoCommand = async (chat: Chat) => {
-  await chat.sendMessage(
+  const msg = await chat.sendMessage(
     "*Demo day*\n\n👉 Share what you've been cooking up!\n\nThere is no specific format. Could be a short vid, link, screenshot or picture. 🏆"
   );
+  const resolved = await recordManualTrigger("demo", msg.id._serialized);
+  if (resolved) {
+    await refreshMissedJobsCache();
+  }
 };
 
 export const handleMonthlyCommand = async (chat: Chat) => {
-  await chat.sendMessage(
+  const msg = await chat.sendMessage(
     "*Monthly Celebration* 🎊\n\nAs we close out the month, take a moment to reflect on your accomplishments!\n\nBe proud of what you've achieved ✨"
   );
+  const resolved = await recordManualTrigger("monthEnd", msg.id._serialized);
+  if (resolved) {
+    await refreshMissedJobsCache();
+  }
 };
 
 export const handleGoalsCommand = async (chat: Chat, message: Message) => {

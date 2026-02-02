@@ -1,5 +1,6 @@
 // Global bot state management
-import { formatDate } from "./utils";
+import { getActualNextPostDates, getJobLabel } from "./dateCalculator";
+import type { JobRun } from "./jobTracker";
 
 // Scheduler state
 export let schedulerActive = false;
@@ -9,6 +10,9 @@ export let botStartTime: Date | null = null;
 // Kickoff tracking
 export let lastKickoffMessageId: string | null = null;
 export let lastKickoffTime: Date | null = null;
+
+// Missed jobs cache (updated on startup and after missed job detection)
+export let missedJobsCache: JobRun[] = [];
 
 // Setters
 export const setSchedulerActive = (active: boolean) => {
@@ -22,6 +26,10 @@ export const setBotStartTime = (time: Date | null) => {
 export const setLastKickoff = (messageId: string | null, time: Date | null) => {
   lastKickoffMessageId = messageId;
   lastKickoffTime = time;
+};
+
+export const setMissedJobsCache = (jobs: JobRun[]) => {
+  missedJobsCache = jobs;
 };
 
 export const clearScheduledJobs = () => {
@@ -44,17 +52,51 @@ export const botStatus = {
     return `${diffDays} days, ${diffHrs} hours, ${diffMins} minutes`;
   },
   nextScheduledTasks: [] as string[],
+  missedJobsDisplay: [] as string[],
 };
 
 export const updateNextScheduledTasks = () => {
-  botStatus.nextScheduledTasks = [];
-  Object.entries(scheduledJobs).forEach(([name, job]) => {
-    if (job && job.nextInvocation) {
-      const nextTime = job.nextInvocation();
-      if (nextTime) {
-        botStatus.nextScheduledTasks.push(`${name}: ${formatDate(nextTime)}`);
-      }
-    }
+  // Get actual next post dates (not when jobs fire)
+  const nextDates = getActualNextPostDates();
+  
+  botStatus.nextScheduledTasks = nextDates.map((d) => {
+    const dateStr = d.nextDate.toLocaleString("en-NZ", {
+      timeZone: "Pacific/Auckland",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return `${d.label}: ${dateStr}`;
   });
-  botStatus.nextScheduledTasks.sort();
+  
+  // Update missed jobs display
+  botStatus.missedJobsDisplay = missedJobsCache.map((job) => {
+    const dateStr = job.scheduledFor.toLocaleDateString("en-NZ", {
+      timeZone: "Pacific/Auckland",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    const command = getCommandForJobType(job.jobType);
+    return `${getJobLabel(job.jobType as any)}: ${dateStr} (use ${command})`;
+  });
 };
+
+function getCommandForJobType(jobType: string): string {
+  switch (jobType) {
+    case "monday":
+      return "!bot monday";
+    case "friday":
+      return "!bot friday";
+    case "demo":
+      return "!bot demo";
+    case "checkIn":
+      return "!bot monday"; // No direct command for check-in
+    case "monthEnd":
+      return "!bot monthly";
+    default:
+      return "!bot help";
+  }
+}

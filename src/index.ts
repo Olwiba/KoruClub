@@ -8,6 +8,7 @@ import { setBotStartTime, setSchedulerActive, botStatus } from "./state";
 import { loadGoals } from "./goalStore";
 import { initLLM } from "./llm";
 import { handleMessage } from "./handlers";
+import { checkMissedJobs } from "./scheduler";
 
 // Guard against duplicate ready events
 let hasInitialized = false;
@@ -86,6 +87,9 @@ client.on("ready", async () => {
 
   // Initialize goal tracking
   await loadGoals();
+
+  // Check for missed jobs during downtime
+  await checkMissedJobs();
 
   // Initialize LLM (non-blocking)
   initLLM().then((ready) => {

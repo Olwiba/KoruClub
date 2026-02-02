@@ -36,3 +36,29 @@ model Goal {
   @@index([sprintNum])
   @@map("goals")
 }
+
+// Scheduled Job Runs - track each job execution
+model ScheduledJobRun {
+  id            String    @id @default(cuid())
+  jobType       String    @map("job_type")      // monday, friday, demo, checkIn, monthEnd
+  scheduledFor  DateTime  @map("scheduled_for")
+  status        String    @default("pending")   // pending, completed, skipped, failed, missed, manual
+  executedAt    DateTime? @map("executed_at")
+  skippedReason String?   @map("skipped_reason")
+  messageId     String?   @map("message_id")
+  error         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([jobType, scheduledFor])
+  @@index([jobType, status])
+  @@map("scheduled_job_runs")
+}
+
+// Scheduler State - singleton for heartbeat/recovery
+model SchedulerState {
+  id               String   @id @default("singleton")
+  lastHeartbeat    DateTime @map("last_heartbeat")
+  schedulerStarted DateTime @map("scheduler_started")
+
+  @@map("scheduler_state")
+}
