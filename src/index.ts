@@ -9,6 +9,9 @@ import { loadGoals } from "./goalStore";
 import { initLLM } from "./llm";
 import { handleMessage } from "./handlers";
 
+// Guard against duplicate ready events
+let hasInitialized = false;
+
 // Global error handlers to catch crashes
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
@@ -42,6 +45,11 @@ client.on("remote_session_saved", () => {
 });
 
 client.on("ready", async () => {
+  if (hasInitialized) {
+    console.log("Client ready (duplicate event ignored)");
+    return;
+  }
+  hasInitialized = true;
   console.log("Client ready");
   setClientReady(true);
   setBotStartTime(new Date());
@@ -49,16 +57,23 @@ client.on("ready", async () => {
   // Send admin notification if configured - with retry
   const adminChatId = process.env.ADMIN_CHAT_ID;
   if (adminChatId) {
+    console.log(`[Admin] Chat ID configured: ${adminChatId}`);
     const sendAdminNotification = async (attempt = 1) => {
       try {
-        await client.sendMessage(adminChatId, "✅ *Bot Online*\n\nKoruClub is now connected and ready.", {
-          sendSeen: false,
-        });
-        console.log("Sent online notification to admin");
+        // Check if chat ID is registered on WhatsApp
+        const numberId = await client.getNumberId(adminChatId.replace("@c.us", ""));
+        if (!numberId) {
+          console.error(`[Admin] Number ${adminChatId} is not registered on WhatsApp`);
+          return;
+        }
+        console.log(`[Admin] Number verified: ${numberId._serialized}`);
+
+        const result = await client.sendMessage(adminChatId, "✅ *Bot Online*\n\nKoruClub is now connected and ready.");
+        console.log(`[Admin] Notification sent, message ID: ${result?.id?._serialized || "unknown"}`);
       } catch (err) {
-        console.error(`Failed to send admin notification (attempt ${attempt}):`, err);
+        console.error(`[Admin] Failed to send notification (attempt ${attempt}):`, err);
         if (attempt < 3) {
-          console.log(`Retrying admin notification in 10s...`);
+          console.log(`[Admin] Retrying in 10s...`);
           setTimeout(() => sendAdminNotification(attempt + 1), 10000);
         }
       }
@@ -66,7 +81,7 @@ client.on("ready", async () => {
     // Wait 15s for WhatsApp to fully stabilize before first attempt
     setTimeout(() => sendAdminNotification(), 15000);
   } else {
-    console.log("No ADMIN_CHAT_ID configured, skipping admin notification");
+    console.log("[Admin] No ADMIN_CHAT_ID configured, skipping notification");
   }
 
   // Initialize goal tracking
@@ -84,6 +99,7 @@ client.on("ready", async () => {
 
 client.on("disconnected", (reason: string) => {
   console.log("Client disconnected:", reason);
+  hasInitialized = false; // Allow re-initialization on reconnect
   setClientReady(false);
   setSchedulerActive(false);
   botStatus.isActive = false;
