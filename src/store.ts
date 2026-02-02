@@ -21,10 +21,18 @@ export class PrismaStore {
   }
 
   async save(options: { session: string }): Promise<void> {
+    // Normalize session ID - extract just the session name from full path
+    const sessionId = options.session.includes("/") 
+      ? options.session.substring(options.session.lastIndexOf("/") + 1)
+      : options.session;
+    
+    console.log(`[PrismaStore] Save called - raw: ${options.session}, normalized: ${sessionId}`);
+    
     const possiblePaths = [
       `${options.session}.zip`,
-      `./.wwebjs_auth/${options.session}.zip`,
-      `.wwebjs_auth/${options.session}.zip`,
+      `./.wwebjs_auth/${sessionId}.zip`,
+      `.wwebjs_auth/${sessionId}.zip`,
+      `${options.session}.zip`.replace(/\.zip\.zip$/, '.zip'), // in case session already has path
     ];
 
     let filePath: string | null = null;
@@ -39,17 +47,17 @@ export class PrismaStore {
       if (filePath) {
         const data = fs.readFileSync(filePath);
         await db.whatsappSession.upsert({
-          where: { sessionId: options.session },
+          where: { sessionId: sessionId },
           update: { data },
-          create: { sessionId: options.session, data },
+          create: { sessionId: sessionId, data },
         });
         const sizeMB = (data.length / 1024 / 1024).toFixed(2);
-        console.log(`[RemoteAuth] Session saved to database (${sizeMB}MB)`);
+        console.log(`[RemoteAuth] Session saved to database (${sizeMB}MB) as ${sessionId}`);
       } else {
-        console.warn(`Session zip file not found. Checked: ${possiblePaths.join(", ")}`);
+        console.warn(`[PrismaStore] Session zip file not found. Checked: ${possiblePaths.join(", ")}`);
       }
     } catch (error) {
-      console.error("Failed to save session to database:", error);
+      console.error("[PrismaStore] Failed to save session to database:", error);
       throw error;
     }
   }
