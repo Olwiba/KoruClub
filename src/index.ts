@@ -5,6 +5,37 @@ import { startHealthServer, setClientReady } from "./health";
 import { client, cleanStaleLockfiles } from "./client";
 import { setBotStartTime, setSchedulerActive, botStatus } from "./state";
 import { handleMessage } from "./handlers";
+import { setupScheduledMessages } from "./scheduler";
+import { autoStartScheduler, targetGroupId } from "./config";
+
+const tryAutoStartScheduler = async () => {
+  if (!autoStartScheduler) {
+    console.log("[Scheduler] Auto-start disabled (AUTO_START_SCHEDULER=false)");
+    return;
+  }
+
+  if (!targetGroupId) {
+    console.log("[Scheduler] Auto-start skipped: TARGET_GROUP_ID is not set");
+    return;
+  }
+
+  try {
+    const targetChat = await client.getChatById(targetGroupId);
+    if (!targetChat.isGroup) {
+      console.error(`[Scheduler] Auto-start failed: TARGET_GROUP_ID is not a group (${targetGroupId})`);
+      return;
+    }
+
+    const started = await setupScheduledMessages(targetChat);
+    if (started) {
+      console.log(`[Scheduler] Auto-started for group ${targetGroupId}`);
+    } else {
+      console.error("[Scheduler] Auto-start failed during setup");
+    }
+  } catch (error) {
+    console.error(`[Scheduler] Auto-start failed for TARGET_GROUP_ID=${targetGroupId}:`, error);
+  }
+};
 
 // Guard against duplicate ready events
 let hasInitialized = false;
@@ -77,6 +108,7 @@ client.on("ready", async () => {
     console.log("[Admin] No ADMIN_CHAT_ID configured, skipping notification");
   }
 
+  await tryAutoStartScheduler();
 });
 
 client.on("disconnected", (reason: string) => {

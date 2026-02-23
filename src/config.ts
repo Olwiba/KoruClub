@@ -16,3 +16,4 @@ export const BOT_CONFIG = {
 // Environment
 export const adminChatId = process.env.ADMIN_CHAT_ID;
 export const targetGroupId = process.env.TARGET_GROUP_ID;
+export const autoStartScheduler = (process.env.AUTO_START_SCHEDULER || "true").toLowerCase() === "true";

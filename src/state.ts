@@ -52,13 +52,12 @@ export const updateNextScheduledTasks = () => {
   
   botStatus.nextScheduledTasks = nextDates.map((d) => {
     const dateStr = d.nextDate.toLocaleString("en-NZ", {
-      timeZone: "Pacific/Auckland",
       weekday: "short",
       month: "short",
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
     });
-    return `${d.label}: ${dateStr}`;
+    return `${d.label}: ${dateStr} NZT`;
   });
 };

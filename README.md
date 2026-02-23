@@ -28,7 +28,7 @@ A WhatsApp-based accountability club for scheduled prompts and group check-ins.
 4. The named volume `koruclub_auth` is created automatically and stores `/app/.wwebjs_auth`
 5. Check the logs for the QR code on first deployment
 6. Scan the QR code with WhatsApp mobile app
-7. Add the bot to your target group chat and run `!bot start`
+7. Set `TARGET_GROUP_ID` and keep `AUTO_START_SCHEDULER=true` to auto-start jobs on boot (or use `!bot start` manually)
 
 **Note**: The nixpacks.toml file is already configured with all necessary dependencies for Puppeteer/Chrome to run in the container.
 
@@ -48,6 +48,7 @@ A WhatsApp-based accountability club for scheduled prompts and group check-ins.
 - The bot automatically reconnects if the WhatsApp session drops
 - The bot is configured for New Zealand Time (NZT)
 - Session data is stored in `.wwebjs_auth/` directory (must be persistent in production)
+- Scheduler can auto-start on boot when `TARGET_GROUP_ID` is configured
 
 ## Contributing 🤝
 
