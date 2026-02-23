@@ -1,8 +1,8 @@
 // Calculate actual next post dates for scheduled jobs
 import {
   isFirstOrThirdMonday,
+  isSecondOrFourthMonday,
   isSecondOrFourthFriday,
-  isSecondOrFourthWednesday,
   isSecondSaturday,
   isLastDayOfMonth,
   getNZDate,
@@ -90,19 +90,19 @@ export function getNextSecondOrFourthFriday(from: Date): Date {
   return setTimeNZ(from, 15, 30);
 }
 
-export function getNextSecondOrFourthWednesday(from: Date): Date {
+export function getNextSecondOrFourthMonday(from: Date): Date {
   let candidate = new Date(from);
   candidate.setHours(0, 0, 0, 0);
   
   const now = getNZDate();
-  if (isSecondOrFourthWednesday(candidate) && candidate.toDateString() === now.toDateString()) {
+  if (isSecondOrFourthMonday(candidate) && candidate.toDateString() === now.toDateString()) {
     if (now.getHours() >= 9) {
       candidate = addDays(candidate, 1);
     }
   }
   
   for (let i = 0; i < 31; i++) {
-    if (isSecondOrFourthWednesday(candidate)) {
+    if (isSecondOrFourthMonday(candidate)) {
       return setTimeNZ(candidate, 9, 0);
     }
     candidate = addDays(candidate, 1);
@@ -160,7 +160,7 @@ export function getActualNextPostDates(): NextPostDate[] {
     { jobType: "monday", nextDate: getNextFirstOrThirdMonday(now), label: JOB_LABELS.monday },
     { jobType: "friday", nextDate: getNextSecondOrFourthFriday(now), label: JOB_LABELS.friday },
     { jobType: "demo", nextDate: getNextSecondSaturday(now), label: JOB_LABELS.demo },
-    { jobType: "checkIn", nextDate: getNextSecondOrFourthWednesday(now), label: JOB_LABELS.checkIn },
+    { jobType: "checkIn", nextDate: getNextSecondOrFourthMonday(now), label: JOB_LABELS.checkIn },
     { jobType: "monthEnd", nextDate: getNextMonthEnd(now), label: JOB_LABELS.monthEnd },
   ];
   
@@ -197,7 +197,7 @@ function getCheckerForJobType(jobType: JobType): (date: Date) => boolean {
     case "demo":
       return isSecondSaturday;
     case "checkIn":
-      return isSecondOrFourthWednesday;
+      return isSecondOrFourthMonday;
     case "monthEnd":
       return isLastDayOfMonth;
   }

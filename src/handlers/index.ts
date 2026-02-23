@@ -14,6 +14,34 @@ import {
   handleMonthlyCommand,
 } from "./commands";
 
+const GOAL_PATTERNS: RegExp[] = [
+  /\bmy goals?\b/i,
+  /\bgoals?\s*[:\-]/i,
+  /\b(?:this|next)\s+(?:week|sprint|fortnight)\s+i(?:'m| am)?\s*(?:will|gonna|going to)\b/i,
+  /\bi(?:'m| am)?\s*(?:going to|gonna|will)\b.*\b(?:build|ship|finish|complete|launch|publish|write|learn|practice|exercise|study)\b/i,
+  /(?:^|\n)\s*(?:[-*•]\s+|\d+[.)]\s+).{6,}/,
+];
+
+const COMPLETION_PATTERNS: RegExp[] = [
+  /\b(?:done|finished|completed)\b/i,
+  /\b(?:shipped|launched|deployed|published)\b/i,
+  /\b(?:wrapped up|knocked out|ticked off)\b/i,
+  /\b(?:made progress|progress update)\b/i,
+  /\b(?:i(?:'ve| have)\s+(?:done|finished|completed|shipped|launched|deployed))\b/i,
+];
+
+const looksLikeGoalSettingMessage = (content: string): boolean => {
+  const text = content.trim();
+  if (text.length < 8) return false;
+  return GOAL_PATTERNS.some((pattern) => pattern.test(text));
+};
+
+const looksLikeGoalCompletionMessage = (content: string): boolean => {
+  const text = content.trim();
+  if (text.length < 6) return false;
+  return COMPLETION_PATTERNS.some((pattern) => pattern.test(text));
+};
+
 export const handleMessage = async (message: Message) => {
   if (message.fromMe) return;
 
@@ -64,6 +92,12 @@ export const handleMessage = async (message: Message) => {
         await handleDemoCommand(chat);
       } else if (content === BOT_CONFIG.MONTHLY_COMMAND) {
         await handleMonthlyCommand(chat);
+      } else if (!content.startsWith(BOT_CONFIG.COMMAND_PREFIX)) {
+        if (looksLikeGoalCompletionMessage(content)) {
+          await message.react("💪");
+        } else if (looksLikeGoalSettingMessage(content)) {
+          await message.react("🎯");
+        }
       }
     } else if (isDirectMessage) {
       // Admin DM commands

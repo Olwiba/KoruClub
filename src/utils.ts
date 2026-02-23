@@ -34,6 +34,14 @@ export const isFirstOrThirdMonday = (date: Date): boolean => {
   return (dayOfMonth >= 1 && dayOfMonth <= 7) || (dayOfMonth >= 15 && dayOfMonth <= 21);
 };
 
+// Check if date is the 2nd or 4th Monday of the month (mid-sprint check-in days)
+export const isSecondOrFourthMonday = (date: Date): boolean => {
+  if (date.getDay() !== 1) return false; // Not Monday
+  const dayOfMonth = date.getDate();
+  // 2nd Monday: day 8-14, 4th Monday: day 22-28
+  return (dayOfMonth >= 8 && dayOfMonth <= 14) || (dayOfMonth >= 22 && dayOfMonth <= 28);
+};
+
 // Check if date is the 2nd or 4th Friday of the month (sprint review days)
 export const isSecondOrFourthFriday = (date: Date): boolean => {
   if (date.getDay() !== 5) return false; // Not Friday
@@ -42,7 +50,7 @@ export const isSecondOrFourthFriday = (date: Date): boolean => {
   return (dayOfMonth >= 8 && dayOfMonth <= 14) || (dayOfMonth >= 22 && dayOfMonth <= 28);
 };
 
-// Check if date is the 2nd or 4th Wednesday of the month (mid-sprint check-in days)
+// Check if date is the 2nd or 4th Wednesday of the month
 export const isSecondOrFourthWednesday = (date: Date): boolean => {
   if (date.getDay() !== 3) return false; // Not Wednesday
   const dayOfMonth = date.getDate();

@@ -6,8 +6,8 @@ import { BOT_CONFIG } from "./config";
 import {
   formatDate,
   isFirstOrThirdMonday,
+  isSecondOrFourthMonday,
   isSecondOrFourthFriday,
-  isSecondOrFourthWednesday,
   isSecondSaturday,
   isLastDayOfMonth,
   getNZDate,
@@ -114,9 +114,9 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
       }
     });
 
-    // Mid-sprint check-in
+    // Mid-sprint check-in (Monday on weeks 2 and 4)
     const checkInRule = new RecurrenceRule();
-    checkInRule.dayOfWeek = 3;
+    checkInRule.dayOfWeek = 1;
     checkInRule.hour = 9;
     checkInRule.minute = 0;
     checkInRule.tz = "Pacific/Auckland";
@@ -124,13 +124,13 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     scheduledJobs.checkIn = scheduleJob("Mid-sprint Check-in", checkInRule, async () => {
       try {
         const now = getNZDate();
-        if (!isSecondOrFourthWednesday(now)) {
+        if (!isSecondOrFourthMonday(now)) {
           return;
         }
         console.log(`Executing Mid-sprint Check-in at ${formatDate(now)} (day ${now.getDate()})`);
         await retryScheduledTask(
           "Mid-sprint Check-in",
-          "*Mid-Sprint Check-in* 📊\n\nWe're halfway through the sprint! How's everyone tracking?\n\n👉 Share a quick update on your progress 👇",
+          "*Mid-Sprint Check-in* 📊\n\nQuick motivation nudge for week two. Keep chipping away at your sprint goals.\n\n👉 Share one thing you're progressing this week 👇",
           BOT_CONFIG.TARGET_GROUP_ID
         );
         updateNextScheduledTasks();
@@ -176,4 +176,3 @@ export const stopScheduler = () => {
   botStatus.scheduledTasksCount = 0;
   botStatus.nextScheduledTasks = [];
 };
-
