@@ -1,6 +1,5 @@
 // Global bot state management
-import { getActualNextPostDates, getJobLabel } from "./dateCalculator";
-import type { JobRun } from "./jobTracker";
+import { getActualNextPostDates } from "./dateCalculator";
 
 // Scheduler state
 export let schedulerActive = false;
@@ -10,9 +9,6 @@ export let botStartTime: Date | null = null;
 // Kickoff tracking
 export let lastKickoffMessageId: string | null = null;
 export let lastKickoffTime: Date | null = null;
-
-// Missed jobs cache (updated on startup and after missed job detection)
-export let missedJobsCache: JobRun[] = [];
 
 // Setters
 export const setSchedulerActive = (active: boolean) => {
@@ -26,10 +22,6 @@ export const setBotStartTime = (time: Date | null) => {
 export const setLastKickoff = (messageId: string | null, time: Date | null) => {
   lastKickoffMessageId = messageId;
   lastKickoffTime = time;
-};
-
-export const setMissedJobsCache = (jobs: JobRun[]) => {
-  missedJobsCache = jobs;
 };
 
 export const clearScheduledJobs = () => {
@@ -52,7 +44,6 @@ export const botStatus = {
     return `${diffDays} days, ${diffHrs} hours, ${diffMins} minutes`;
   },
   nextScheduledTasks: [] as string[],
-  missedJobsDisplay: [] as string[],
 };
 
 export const updateNextScheduledTasks = () => {
@@ -70,33 +61,4 @@ export const updateNextScheduledTasks = () => {
     });
     return `${d.label}: ${dateStr}`;
   });
-  
-  // Update missed jobs display
-  botStatus.missedJobsDisplay = missedJobsCache.map((job) => {
-    const dateStr = job.scheduledFor.toLocaleDateString("en-NZ", {
-      timeZone: "Pacific/Auckland",
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    });
-    const command = getCommandForJobType(job.jobType);
-    return `${getJobLabel(job.jobType as any)}: ${dateStr} (use ${command})`;
-  });
 };
-
-function getCommandForJobType(jobType: string): string {
-  switch (jobType) {
-    case "monday":
-      return "!bot monday";
-    case "friday":
-      return "!bot friday";
-    case "demo":
-      return "!bot demo";
-    case "checkIn":
-      return "!bot monday"; // No direct command for check-in
-    case "monthEnd":
-      return "!bot monthly";
-    default:
-      return "!bot help";
-  }
-}

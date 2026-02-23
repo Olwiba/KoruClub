@@ -1,27 +1,12 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: koruclub-ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_KEEP_ALIVE=30s
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-
   koruclub:
     build: .
     container_name: koruclub-bot
+    volumes:
+      - koruclub_auth:/app/.wwebjs_auth
     environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - OLLAMA_HOST=http://ollama:11434
-    depends_on:
-      ollama:
-        condition: service_healthy
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+      - TARGET_GROUP_ID=${TARGET_GROUP_ID}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -29,14 +14,6 @@ services:
       start_period: 120s
       retries: 3
     restart: unless-stopped
-    networks:
-      - default
-      - coolify
-
-networks:
-  coolify:
-    external: true
-  default:
 
 volumes:
-  ollama_data:
+  koruclub_auth:

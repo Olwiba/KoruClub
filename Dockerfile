@@ -24,10 +24,6 @@ COPY package.json bun.lockb ./
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 RUN bun install --frozen-lockfile --production
 
-# Copy prisma schema and generate client
-COPY prisma ./prisma
-RUN bun run db:generate
-
 # Copy app source
 COPY . .
 
@@ -48,4 +44,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
   CMD curl -f http://localhost:3000/health || exit 1
 
-CMD ["sh", "-c", "bun run db:push && bun run start"]
+CMD ["bun", "run", "start"]

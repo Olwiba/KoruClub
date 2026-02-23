@@ -1,14 +1,10 @@
 // KoruClub WhatsApp Bot - Main Entry Point
 const qrcode = require("qrcode-terminal");
 
-import { db } from "./db";
 import { startHealthServer, setClientReady } from "./health";
 import { client, cleanStaleLockfiles } from "./client";
 import { setBotStartTime, setSchedulerActive, botStatus } from "./state";
-import { loadGoals } from "./goalStore";
-import { initLLM } from "./llm";
 import { handleMessage } from "./handlers";
-import { checkMissedJobs } from "./scheduler";
 
 // Guard against duplicate ready events
 let hasInitialized = false;
@@ -39,10 +35,6 @@ client.on("authenticated", () => {
 
 client.on("auth_failure", (msg: string) => {
   console.error("Authentication failed:", msg);
-});
-
-client.on("remote_session_saved", () => {
-  console.log("✅ WhatsApp session saved to database");
 });
 
 client.on("ready", async () => {
@@ -85,20 +77,6 @@ client.on("ready", async () => {
     console.log("[Admin] No ADMIN_CHAT_ID configured, skipping notification");
   }
 
-  // Initialize goal tracking
-  await loadGoals();
-
-  // Check for missed jobs during downtime
-  await checkMissedJobs();
-
-  // Initialize LLM (non-blocking)
-  initLLM().then((ready) => {
-    if (ready) {
-      console.log("Goal tracking with LLM is active");
-    } else {
-      console.warn("LLM not available - goal tracking will be limited");
-    }
-  });
 });
 
 client.on("disconnected", (reason: string) => {
@@ -117,15 +95,6 @@ client.on("message_create", handleMessage);
 
 async function main() {
   console.log("Starting KoruClub...");
-
-  // Connect to database
-  try {
-    await db.$connect();
-    console.log("Database connected");
-  } catch (err) {
-    console.error("Failed to connect to database:", err);
-    process.exit(1);
-  }
 
   // Clean up stale lockfiles from previous runs
   cleanStaleLockfiles();

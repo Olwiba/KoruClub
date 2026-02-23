@@ -12,11 +12,7 @@ import {
   handleFridayCommand,
   handleDemoCommand,
   handleMonthlyCommand,
-  handleGoalsCommand,
-  handleMentorCommand,
 } from "./commands";
-import { handleGoalMessage } from "./goals";
-import { handleStatsCommand, handleChatCommand, handleUsersCommand, handleIngestCommand } from "./admin";
 
 export const handleMessage = async (message: Message) => {
   if (message.fromMe) return;
@@ -68,13 +64,6 @@ export const handleMessage = async (message: Message) => {
         await handleDemoCommand(chat);
       } else if (content === BOT_CONFIG.MONTHLY_COMMAND) {
         await handleMonthlyCommand(chat);
-      } else if (content === BOT_CONFIG.GOALS_COMMAND) {
-        await handleGoalsCommand(chat, message);
-      } else if (content === BOT_CONFIG.MENTOR_COMMAND) {
-        await handleMentorCommand(chat, message);
-      } else if (!content.startsWith(BOT_CONFIG.COMMAND_PREFIX)) {
-        // Non-command message - check for goal-related content
-        await handleGoalMessage(message, content);
       }
     } else if (isDirectMessage) {
       // Admin DM commands
@@ -82,14 +71,6 @@ export const handleMessage = async (message: Message) => {
         await handleStatusCommand(chat);
       } else if (content === BOT_CONFIG.HELP_COMMAND) {
         await handleHelpCommand(chat, true);
-      } else if (content === BOT_CONFIG.STATS_COMMAND) {
-        await handleStatsCommand(chat);
-      } else if (content === BOT_CONFIG.USERS_COMMAND) {
-        await handleUsersCommand(chat);
-      } else if (content.startsWith(BOT_CONFIG.INGEST_COMMAND)) {
-        await handleIngestCommand(chat, content);
-      } else if (content.startsWith(BOT_CONFIG.CHAT_COMMAND)) {
-        await handleChatCommand(chat, content);
       }
     }
   } catch (error) {
