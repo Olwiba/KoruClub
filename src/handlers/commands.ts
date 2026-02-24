@@ -4,6 +4,7 @@ import type { Chat, GroupChat } from "whatsapp-web.js";
 import { BOT_CONFIG } from "../config";
 import { botStatus, schedulerActive, setLastKickoff } from "../state";
 import { setupScheduledMessages, stopScheduler } from "../scheduler";
+import { getClient } from "../client";
 
 export const handleStartCommand = async (chat: Chat) => {
   if (schedulerActive) {
@@ -48,6 +49,7 @@ export const handleHelpCommand = async (chat: Chat, isAdmin: boolean = false) =>
     const helpText =
       `*Admin Commands (Direct Message)*\n\n` +
       `📊 *${BOT_CONFIG.STATUS_COMMAND}* - Show bot status\n` +
+      `📣 *${BOT_CONFIG.SAY_COMMAND} <message>* - Broadcast a message to the target group\n` +
       `🛟 *${BOT_CONFIG.HELP_COMMAND}* - Show this help\n\n` +
       `*Note:* Start/stop commands must be used in the target group chat.`;
     await chat.sendMessage(helpText);
@@ -89,4 +91,33 @@ export const handleMonthlyCommand = async (chat: Chat) => {
   await chat.sendMessage(
     "*Monthly Celebration* 🎊\n\nAs we close out the month, take a moment to reflect on your accomplishments!\n\nBe proud of what you've achieved ✨"
   );
+};
+
+export const handleSayCommand = async (chat: Chat, content: string) => {
+  const text = content.slice(BOT_CONFIG.SAY_COMMAND.length).trim();
+  if (!text) {
+    await chat.sendMessage(`Usage: ${BOT_CONFIG.SAY_COMMAND} <message>`);
+    return;
+  }
+
+  const targetGroupId = BOT_CONFIG.TARGET_GROUP_ID || process.env.TARGET_GROUP_ID || "";
+  if (!targetGroupId) {
+    await chat.sendMessage("❌ No target group configured. Set TARGET_GROUP_ID or run !bot start in the group first.");
+    return;
+  }
+
+  try {
+    const client = getClient();
+    const targetChat = await client.getChatById(targetGroupId);
+    if (!targetChat || !targetChat.isGroup) {
+      await chat.sendMessage("❌ Target group not found or is not a group chat.");
+      return;
+    }
+
+    await targetChat.sendMessage(text, { sendSeen: false });
+    await chat.sendMessage("✅ Message sent to target group.");
+  } catch (error) {
+    console.error("Error sending admin broadcast:", error);
+    await chat.sendMessage("❌ Failed to send message to target group.");
+  }
 };

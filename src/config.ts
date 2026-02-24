@@ -6,6 +6,7 @@ export const BOT_CONFIG = {
   STOP_COMMAND: "!bot stop",
   STATUS_COMMAND: "!bot status",
   HELP_COMMAND: "!bot help",
+  SAY_COMMAND: "!bot say",
   MONDAY_COMMAND: "!bot monday",
   FRIDAY_COMMAND: "!bot friday",
   DEMO_COMMAND: "!bot demo",

@@ -8,6 +8,7 @@ import {
   handleStopCommand,
   handleStatusCommand,
   handleHelpCommand,
+  handleSayCommand,
   handleMondayCommand,
   handleFridayCommand,
   handleDemoCommand,
@@ -105,6 +106,8 @@ export const handleMessage = async (message: Message) => {
         await handleStatusCommand(chat);
       } else if (content === BOT_CONFIG.HELP_COMMAND) {
         await handleHelpCommand(chat, true);
+      } else if (content.startsWith(BOT_CONFIG.SAY_COMMAND)) {
+        await handleSayCommand(chat, content);
       }
     }
   } catch (error) {
