@@ -24,7 +24,7 @@ import {
 } from "./state";
 
 export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
-  if (schedulerActive) {
+  if (schedulerActive || Object.keys(scheduledJobs).length > 0) {
     clearScheduledJobs();
   }
 

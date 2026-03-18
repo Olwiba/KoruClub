@@ -3,9 +3,9 @@ const qrcode = require("qrcode-terminal");
 
 import { startHealthServer, setClientReady } from "./health";
 import { client, cleanStaleLockfiles } from "./client";
-import { setBotStartTime, setSchedulerActive, botStatus } from "./state";
+import { setBotStartTime } from "./state";
 import { handleMessage } from "./handlers";
-import { setupScheduledMessages } from "./scheduler";
+import { setupScheduledMessages, stopScheduler } from "./scheduler";
 import { autoStartScheduler, targetGroupId } from "./config";
 
 const tryAutoStartScheduler = async () => {
@@ -37,8 +37,10 @@ const tryAutoStartScheduler = async () => {
   }
 };
 
-// Guard against duplicate ready events
-let hasInitialized = false;
+// Keep duplicate ready events harmless without permanently skipping reconnect setup.
+let hasAnnouncedReady = false;
+let readySetupInProgress = false;
+let adminNotificationTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Global error handlers to catch crashes
 process.on("uncaughtException", (err) => {
@@ -69,18 +71,16 @@ client.on("auth_failure", (msg: string) => {
 });
 
 client.on("ready", async () => {
-  if (hasInitialized) {
-    console.log("Client ready (duplicate event ignored)");
-    return;
-  }
-  hasInitialized = true;
-  console.log("Client ready");
+  console.log(hasAnnouncedReady ? "Client ready (duplicate event)" : "Client ready");
   setClientReady(true);
-  setBotStartTime(new Date());
+  if (!hasAnnouncedReady) {
+    setBotStartTime(new Date());
+    hasAnnouncedReady = true;
+  }
 
   // Send admin notification if configured - with retry
   const adminChatId = process.env.ADMIN_CHAT_ID;
-  if (adminChatId) {
+  if (adminChatId && !adminNotificationTimer) {
     console.log(`[Admin] Chat ID configured: ${adminChatId}`);
     const sendAdminNotification = async (attempt = 1) => {
       try {
@@ -98,25 +98,39 @@ client.on("ready", async () => {
         console.error(`[Admin] Failed to send notification (attempt ${attempt}):`, err);
         if (attempt < 3) {
           console.log(`[Admin] Retrying in 10s...`);
-          setTimeout(() => sendAdminNotification(attempt + 1), 10000);
+          adminNotificationTimer = setTimeout(() => sendAdminNotification(attempt + 1), 10000);
         }
       }
     };
     // Wait 30s for WhatsApp to fully stabilize before first attempt
-    setTimeout(() => sendAdminNotification(), 30000);
-  } else {
+    adminNotificationTimer = setTimeout(() => sendAdminNotification(), 30000);
+  } else if (!adminChatId) {
     console.log("[Admin] No ADMIN_CHAT_ID configured, skipping notification");
   }
 
-  await tryAutoStartScheduler();
+  if (readySetupInProgress) {
+    console.log("[Scheduler] Ready setup already in progress");
+    return;
+  }
+
+  readySetupInProgress = true;
+  try {
+    await tryAutoStartScheduler();
+  } finally {
+    readySetupInProgress = false;
+  }
 });
 
 client.on("disconnected", (reason: string) => {
   console.log("Client disconnected:", reason);
-  hasInitialized = false; // Allow re-initialization on reconnect
+  hasAnnouncedReady = false;
+  readySetupInProgress = false;
+  if (adminNotificationTimer) {
+    clearTimeout(adminNotificationTimer);
+    adminNotificationTimer = null;
+  }
   setClientReady(false);
-  setSchedulerActive(false);
-  botStatus.isActive = false;
+  stopScheduler();
 });
 
 client.on("message_create", handleMessage);
