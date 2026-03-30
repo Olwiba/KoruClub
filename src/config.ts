@@ -18,3 +18,4 @@ export const BOT_CONFIG = {
 export const adminChatId = process.env.ADMIN_CHAT_ID;
 export const targetGroupId = process.env.TARGET_GROUP_ID;
 export const autoStartScheduler = (process.env.AUTO_START_SCHEDULER || "true").toLowerCase() === "true";
+export const sprintKickoffAnchorDate = process.env.SPRINT_KICKOFF_ANCHOR_DATE || "2025-01-06";

@@ -1,8 +1,8 @@
 // Calculate actual next post dates for scheduled jobs
 import {
-  isFirstOrThirdMonday,
-  isSecondOrFourthMonday,
-  isSecondOrFourthFriday,
+  isMidSprintCheckInMonday,
+  isSprintKickoffMonday,
+  isSprintReviewFriday,
   isSecondSaturday,
   isLastDayOfMonth,
   getNZDate,
@@ -44,14 +44,14 @@ function addDays(date: Date, days: number): Date {
   return result;
 }
 
-export function getNextFirstOrThirdMonday(from: Date): Date {
+export function getNextSprintKickoff(from: Date): Date {
   let candidate = new Date(from);
   // Move to start of day
   candidate.setHours(0, 0, 0, 0);
   
   // If it's past 9am on a valid Monday, start from tomorrow
   const now = getNZDate();
-  if (isFirstOrThirdMonday(candidate) && candidate.toDateString() === now.toDateString()) {
+  if (isSprintKickoffMonday(candidate) && candidate.toDateString() === now.toDateString()) {
     if (now.getHours() >= 9) {
       candidate = addDays(candidate, 1);
     }
@@ -59,7 +59,7 @@ export function getNextFirstOrThirdMonday(from: Date): Date {
   
   // Search up to 31 days ahead
   for (let i = 0; i < 31; i++) {
-    if (isFirstOrThirdMonday(candidate)) {
+    if (isSprintKickoffMonday(candidate)) {
       return setTimeNZ(candidate, 9, 0);
     }
     candidate = addDays(candidate, 1);
@@ -69,19 +69,19 @@ export function getNextFirstOrThirdMonday(from: Date): Date {
   return setTimeNZ(from, 9, 0);
 }
 
-export function getNextSecondOrFourthFriday(from: Date): Date {
+export function getNextSprintReview(from: Date): Date {
   let candidate = new Date(from);
   candidate.setHours(0, 0, 0, 0);
   
   const now = getNZDate();
-  if (isSecondOrFourthFriday(candidate) && candidate.toDateString() === now.toDateString()) {
+  if (isSprintReviewFriday(candidate) && candidate.toDateString() === now.toDateString()) {
     if (now.getHours() >= 15 || (now.getHours() === 15 && now.getMinutes() >= 30)) {
       candidate = addDays(candidate, 1);
     }
   }
   
   for (let i = 0; i < 31; i++) {
-    if (isSecondOrFourthFriday(candidate)) {
+    if (isSprintReviewFriday(candidate)) {
       return setTimeNZ(candidate, 15, 30);
     }
     candidate = addDays(candidate, 1);
@@ -90,19 +90,19 @@ export function getNextSecondOrFourthFriday(from: Date): Date {
   return setTimeNZ(from, 15, 30);
 }
 
-export function getNextSecondOrFourthMonday(from: Date): Date {
+export function getNextMidSprintCheckIn(from: Date): Date {
   let candidate = new Date(from);
   candidate.setHours(0, 0, 0, 0);
   
   const now = getNZDate();
-  if (isSecondOrFourthMonday(candidate) && candidate.toDateString() === now.toDateString()) {
+  if (isMidSprintCheckInMonday(candidate) && candidate.toDateString() === now.toDateString()) {
     if (now.getHours() >= 9) {
       candidate = addDays(candidate, 1);
     }
   }
   
   for (let i = 0; i < 31; i++) {
-    if (isSecondOrFourthMonday(candidate)) {
+    if (isMidSprintCheckInMonday(candidate)) {
       return setTimeNZ(candidate, 9, 0);
     }
     candidate = addDays(candidate, 1);
@@ -157,10 +157,10 @@ export function getActualNextPostDates(): NextPostDate[] {
   const now = getNZDate();
   
   const dates: NextPostDate[] = [
-    { jobType: "monday", nextDate: getNextFirstOrThirdMonday(now), label: JOB_LABELS.monday },
-    { jobType: "friday", nextDate: getNextSecondOrFourthFriday(now), label: JOB_LABELS.friday },
+    { jobType: "monday", nextDate: getNextSprintKickoff(now), label: JOB_LABELS.monday },
+    { jobType: "friday", nextDate: getNextSprintReview(now), label: JOB_LABELS.friday },
     { jobType: "demo", nextDate: getNextSecondSaturday(now), label: JOB_LABELS.demo },
-    { jobType: "checkIn", nextDate: getNextSecondOrFourthMonday(now), label: JOB_LABELS.checkIn },
+    { jobType: "checkIn", nextDate: getNextMidSprintCheckIn(now), label: JOB_LABELS.checkIn },
     { jobType: "monthEnd", nextDate: getNextMonthEnd(now), label: JOB_LABELS.monthEnd },
   ];
   
@@ -191,13 +191,13 @@ export function getMostRecentScheduledDate(jobType: JobType, before: Date): Date
 function getCheckerForJobType(jobType: JobType): (date: Date) => boolean {
   switch (jobType) {
     case "monday":
-      return isFirstOrThirdMonday;
+      return isSprintKickoffMonday;
     case "friday":
-      return isSecondOrFourthFriday;
+      return isSprintReviewFriday;
     case "demo":
       return isSecondSaturday;
     case "checkIn":
-      return isSecondOrFourthMonday;
+      return isMidSprintCheckInMonday;
     case "monthEnd":
       return isLastDayOfMonth;
   }

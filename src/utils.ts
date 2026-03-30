@@ -1,4 +1,55 @@
 // Helper utility functions
+import { sprintKickoffAnchorDate } from "./config";
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const DEFAULT_SPRINT_KICKOFF_ANCHOR_DATE = new Date(2025, 0, 6);
+
+const parseDateOnly = (value: string): Date | null => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day));
+};
+
+const sprintKickoffAnchor = (() => {
+  const parsed = parseDateOnly(sprintKickoffAnchorDate);
+  if (!parsed) {
+    console.warn(
+      `[Scheduler] Invalid SPRINT_KICKOFF_ANCHOR_DATE="${sprintKickoffAnchorDate}", falling back to 2025-01-06`
+    );
+    return DEFAULT_SPRINT_KICKOFF_ANCHOR_DATE;
+  }
+
+  if (parsed.getDay() !== 1) {
+    console.warn(
+      `[Scheduler] SPRINT_KICKOFF_ANCHOR_DATE="${sprintKickoffAnchorDate}" is not a Monday; biweekly cadence may be misaligned`
+    );
+  }
+
+  return parsed;
+})();
+
+const getCalendarDayValue = (date: Date): number =>
+  Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+
+const diffInCalendarDays = (date: Date, anchor: Date): number =>
+  Math.round((getCalendarDayValue(date) - getCalendarDayValue(anchor)) / MS_PER_DAY);
+
+const isBiweeklyOccurrence = (date: Date, weekday: number, offsetFromKickoffDays: number): boolean => {
+  if (date.getDay() !== weekday) {
+    return false;
+  }
+
+  const diffDays = diffInCalendarDays(date, sprintKickoffAnchor);
+  if (diffDays < 0) {
+    return false;
+  }
+
+  return diffDays % 14 === offsetFromKickoffDays;
+};
 
 export const formatDate = (date: Date): string => {
   return date.toLocaleString("en-NZ", {
@@ -26,29 +77,14 @@ export const isSprintWeek = (date: Date): boolean => {
   return getISOWeekNumber(date) % 2 === 1;
 };
 
-// Check if date is the 1st or 3rd Monday of the month (sprint kickoff days)
-export const isFirstOrThirdMonday = (date: Date): boolean => {
-  if (date.getDay() !== 1) return false; // Not Monday
-  const dayOfMonth = date.getDate();
-  // 1st Monday: day 1-7, 3rd Monday: day 15-21
-  return (dayOfMonth >= 1 && dayOfMonth <= 7) || (dayOfMonth >= 15 && dayOfMonth <= 21);
-};
+// Sprint kickoff repeats every 14 days from the configured kickoff anchor Monday.
+export const isSprintKickoffMonday = (date: Date): boolean => isBiweeklyOccurrence(date, 1, 0);
 
-// Check if date is the 2nd or 4th Monday of the month (mid-sprint check-in days)
-export const isSecondOrFourthMonday = (date: Date): boolean => {
-  if (date.getDay() !== 1) return false; // Not Monday
-  const dayOfMonth = date.getDate();
-  // 2nd Monday: day 8-14, 4th Monday: day 22-28
-  return (dayOfMonth >= 8 && dayOfMonth <= 14) || (dayOfMonth >= 22 && dayOfMonth <= 28);
-};
+// Mid-sprint check-in lands 7 days after each kickoff.
+export const isMidSprintCheckInMonday = (date: Date): boolean => isBiweeklyOccurrence(date, 1, 7);
 
-// Check if date is the 2nd or 4th Friday of the month (sprint review days)
-export const isSecondOrFourthFriday = (date: Date): boolean => {
-  if (date.getDay() !== 5) return false; // Not Friday
-  const dayOfMonth = date.getDate();
-  // 2nd Friday: day 8-14, 4th Friday: day 22-28
-  return (dayOfMonth >= 8 && dayOfMonth <= 14) || (dayOfMonth >= 22 && dayOfMonth <= 28);
-};
+// Sprint review lands 11 days after kickoff, on the Friday of week two.
+export const isSprintReviewFriday = (date: Date): boolean => isBiweeklyOccurrence(date, 5, 11);
 
 // Check if date is the 2nd or 4th Wednesday of the month
 export const isSecondOrFourthWednesday = (date: Date): boolean => {

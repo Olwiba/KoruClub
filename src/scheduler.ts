@@ -5,9 +5,9 @@ const { scheduleJob, RecurrenceRule } = require("node-schedule");
 import { BOT_CONFIG } from "./config";
 import {
   formatDate,
-  isFirstOrThirdMonday,
-  isSecondOrFourthMonday,
-  isSecondOrFourthFriday,
+  isMidSprintCheckInMonday,
+  isSprintKickoffMonday,
+  isSprintReviewFriday,
   isSecondSaturday,
   isLastDayOfMonth,
   getNZDate,
@@ -46,7 +46,7 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     scheduledJobs.monday = scheduleJob("Monday 9am", mondayRule, async () => {
       try {
         const now = getNZDate();
-        if (!isFirstOrThirdMonday(now)) {
+        if (!isSprintKickoffMonday(now)) {
           return;
         }
         console.log(`Executing Sprint Kickoff at ${formatDate(now)} (day ${now.getDate()})`);
@@ -74,7 +74,7 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     scheduledJobs.friday = scheduleJob("Friday 3:30pm", fridayRule, async () => {
       try {
         const now = getNZDate();
-        if (!isSecondOrFourthFriday(now)) {
+        if (!isSprintReviewFriday(now)) {
           return;
         }
         console.log(`Executing Sprint Review at ${formatDate(now)} (day ${now.getDate()})`);
@@ -114,7 +114,7 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
       }
     });
 
-    // Mid-sprint check-in (Monday on weeks 2 and 4)
+    // Mid-sprint check-in (Monday one week after each kickoff)
     const checkInRule = new RecurrenceRule();
     checkInRule.dayOfWeek = 1;
     checkInRule.hour = 9;
@@ -124,7 +124,7 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     scheduledJobs.checkIn = scheduleJob("Mid-sprint Check-in", checkInRule, async () => {
       try {
         const now = getNZDate();
-        if (!isSecondOrFourthMonday(now)) {
+        if (!isMidSprintCheckInMonday(now)) {
           return;
         }
         console.log(`Executing Mid-sprint Check-in at ${formatDate(now)} (day ${now.getDate()})`);
@@ -140,7 +140,12 @@ export const setupScheduledMessages = async (initialGroupChat: GroupChat) => {
     });
 
     // Month end
-    scheduledJobs.monthEnd = scheduleJob("0 9 * * *", async () => {
+    const monthEndRule = new RecurrenceRule();
+    monthEndRule.hour = 9;
+    monthEndRule.minute = 0;
+    monthEndRule.tz = "Pacific/Auckland";
+
+    scheduledJobs.monthEnd = scheduleJob("Month End", monthEndRule, async () => {
       try {
         const now = getNZDate();
         if (!isLastDayOfMonth(now)) {
